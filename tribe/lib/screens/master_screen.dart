@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../widgets/tribe_app_bar.dart';
+import '../utils/error_handler.dart';
 import 'service_screen.dart';
 import 'master_works_screen.dart';
 
@@ -8,18 +9,26 @@ class MasterScreen extends StatelessWidget {
   const MasterScreen({super.key});
 
   Future<List<Map<String, dynamic>>> _fetchBarbers() async {
-    final response = await Supabase.instance.client
-        .from('users')
-        .select('user_id, full_name, raiting_avg, photo_url')
-        .eq('role_id', 2)
-        .eq('is_active', true)
-        .order('raiting_avg', ascending: false);
+    try {
+      final response = await Supabase.instance.client
+          .from('users')
+          .select('user_id, full_name, raiting_avg, photo_url')
+          .eq('role_id', 2)
+          .eq('is_active', true)
+          .order('raiting_avg', ascending: false);
 
-    final List<Map<String, dynamic>> masters = List<Map<String, dynamic>>.from(response);
-    for (var m in masters) {
-      m['review_count'] = 31; // Заглушка, позже заменить на реальный подсчёт
+      final List<Map<String, dynamic>> masters = List<Map<String, dynamic>>.from(response);
+      for (var m in masters) {
+        m['review_count'] = 31;
+      }
+      return masters;
+    } on PostgrestException catch (e) {
+      ErrorHandler.logError('MasterScreen._fetchBarbers', e);
+      rethrow;
+    } catch (e) {
+      ErrorHandler.logError('MasterScreen._fetchBarbers', e);
+      rethrow;
     }
-    return masters;
   }
 
   @override
@@ -30,25 +39,76 @@ class MasterScreen extends StatelessWidget {
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: _fetchBarbers(),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.white));
-          }
+          // ✅ Обработка ошибок
           if (snapshot.hasError) {
+            ErrorHandler.logError('MasterScreen.build', snapshot.error!);
             return Center(
-              child: Text(
-                'Ошибка: ${snapshot.error}',
-                style: const TextStyle(color: Colors.red),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.wifi_off_rounded,
+                      size: 64,
+                      color: Colors.white54,
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Не удалось загрузить мастеров',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      ErrorHandler.getErrorMessage(snapshot.error),
+                      style: const TextStyle(color: Colors.white54),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        // Перезагрузка экрана
+                        Navigator.of(context).pop();
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const MasterScreen()),
+                        );
+                      },
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Попробовать снова'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFD47926),
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           }
 
+          // Загрузка
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: Colors.white));
+          }
+
+          // Нет данных
           final barbers = snapshot.data ?? [];
           if (barbers.isEmpty) {
             return const Center(
-              child: Text('Нет мастеров', style: TextStyle(color: Colors.white70)),
+              child: Text(
+                'Нет мастеров',
+                style: TextStyle(color: Colors.white70),
+              ),
             );
           }
 
+          // Успех
           return ListView.separated(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
             itemCount: barbers.length,
@@ -195,7 +255,10 @@ class _MasterCard extends StatelessWidget {
               ),
             );
           },
-          errorBuilder: (context, error, stackTrace) => _buildInitialsAvatar(),
+          errorBuilder: (context, error, stackTrace) {
+            ErrorHandler.logError('_MasterCard._buildAvatar', error, stackTrace);
+            return _buildInitialsAvatar();
+          },
         ),
       );
     }

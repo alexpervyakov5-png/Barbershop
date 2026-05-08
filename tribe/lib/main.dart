@@ -106,10 +106,10 @@ class AuthGate extends StatefulWidget {
 class _AuthGateState extends State<AuthGate> {
   StreamSubscription<AuthState>? _authSubscription;
   
-  bool _isLoading = true;
-  bool _isCheckingRole = false;
-  bool _isAuthenticated = false;
-  bool _isAdmin = false;
+  // ✅ Ключевые флаги
+  bool _isLoading = true;           // Загружается ли приложение
+  bool _isRoleChecked = false;      // ✅ Проверена ли роль
+  int? _userRoleId;                 // Роль пользователя
 
   @override
   void initState() {
@@ -124,13 +124,13 @@ class _AuthGateState extends State<AuthGate> {
     super.dispose();
   }
 
-  /// ✅ Инициализация при старте приложения
+  /// ✅ Инициализация при старте
   Future<void> _initializeAuth() async {
     try {
       final session = Supabase.instance.client.auth.currentSession;
       
       if (session != null) {
-        // Проверяем, не истёк ли токен
+        // Проверяем токен
         final expiresAtInt = session.expiresAt;
         if (expiresAtInt != null && expiresAtInt > 0) {
           final expiresAt = DateTime.fromMillisecondsSinceEpoch(expiresAtInt * 1000);
@@ -142,8 +142,8 @@ class _AuthGateState extends State<AuthGate> {
               if (mounted) {
                 setState(() {
                   _isLoading = false;
-                  _isAuthenticated = false;
-                  _isAdmin = false;
+                  _isRoleChecked = true;
+                  _userRoleId = null;
                 });
               }
               return;
@@ -151,22 +151,22 @@ class _AuthGateState extends State<AuthGate> {
           }
         }
         
-        // ✅ Проверяем роль пользователя
+        // ✅ Сначала проверяем роль, ПОТОМ разрешаем рендер
         await _checkUserRole();
         
         if (mounted) {
           setState(() {
-            _isAuthenticated = true;
             _isLoading = false;
+            _isRoleChecked = true;  // ✅ Роль проверена!
           });
         }
       } else {
-        // Нет сессии
+        // Нет сессии — не админ
         if (mounted) {
           setState(() {
-            _isAuthenticated = false;
-            _isAdmin = false;
             _isLoading = false;
+            _isRoleChecked = true;  // ✅ Проверка завершена (нет пользователя)
+            _userRoleId = null;
           });
         }
       }
@@ -175,7 +175,7 @@ class _AuthGateState extends State<AuthGate> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _isAuthenticated = false;
+          _isRoleChecked = true;  // ✅ Даже при ошибке — проверка "завершена"
         });
       }
     }
@@ -183,61 +183,45 @@ class _AuthGateState extends State<AuthGate> {
 
   /// ✅ Проверка роли пользователя
   Future<void> _checkUserRole() async {
-    if (_isCheckingRole) return;
-    _isCheckingRole = true;
-
     try {
       final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) {
-        _isCheckingRole = false;
-        return;
-      }
+      if (user == null) return;
 
-      debugPrint('🔍 Проверяем роль для пользователя: ${user.id}');
+      debugPrint('🔍 Проверяем роль для: ${user.id}');
 
       final response = await Supabase.instance.client
           .from('users')
-          .select('role_id, email')
+          .select('role_id')
           .eq('user_id', user.id)
           .maybeSingle();
 
-      if (!mounted) {
-        _isCheckingRole = false;
-        return;
-      }
+      if (!mounted) return;
 
       if (response == null) {
-        debugPrint('⚠️ Запись пользователя не найдена в таблице users');
-        _isCheckingRole = false;
+        debugPrint('⚠️ Запись пользователя не найдена');
         return;
       }
 
       final roleId = response['role_id'] as int?;
-      final email = response['email'] as String?;
+      debugPrint('📊 Role ID: $roleId');
       
-      debugPrint('📊 Role ID: $roleId, Email: $email');
-      
-      final isAdmin = roleId == 3;
-
       setState(() {
-        _isAdmin = isAdmin;
+        _userRoleId = roleId;
       });
 
-      debugPrint('👑 Is Admin: $isAdmin');
-
-      // ✅ Если админ — перенаправляем
-      if (isAdmin && mounted) {
+      // ✅ Навигация ТОЛЬКО после того, как роль сохранена в state
+      if (roleId == 3 && mounted) {
+        debugPrint('👑 Админ найден, перенаправляем...');
+        // Используем pushReplacement чтобы убрать AuthGate из стека
         Navigator.of(context).pushReplacementNamed('/admin');
       }
 
     } catch (e) {
       debugPrint('❌ Ошибка проверки роли: $e');
-    } finally {
-      _isCheckingRole = false;
     }
   }
 
-  /// ✅ Слушаем изменения авторизации
+  /// ✅ Слушатель изменений авторизации
   void _listenToAuthChanges() {
     _authSubscription = Supabase.instance.client.auth.onAuthStateChange.listen(
       (data) async {
@@ -247,11 +231,12 @@ class _AuthGateState extends State<AuthGate> {
         if (!mounted) return;
         
         if (event == AuthChangeEvent.signedIn) {
-          // ✅ Пользователь вошёл — проверяем роль
-          debugPrint('📥 Пользователь вошёл, проверяем роль...');
+          // ✅ Пользователь вошёл — ПЕРЕЗАПУСКАЕМ проверку
+          debugPrint('📥 SignedIn — проверяем роль...');
           setState(() {
             _isLoading = true;
-            _isAuthenticated = true;
+            _isRoleChecked = false;  // ✅ Сбрасываем флаг
+            _userRoleId = null;
           });
           
           await _checkUserRole();
@@ -259,21 +244,20 @@ class _AuthGateState extends State<AuthGate> {
           if (mounted) {
             setState(() {
               _isLoading = false;
+              _isRoleChecked = true;  // ✅ Роль проверена
             });
           }
         } else if (event == AuthChangeEvent.signedOut) {
-          // ✅ Пользователь вышел
-          debugPrint('📤 Пользователь вышел');
+          debugPrint('📤 SignedOut');
           if (mounted) {
             setState(() {
-              _isAuthenticated = false;
-              _isAdmin = false;
               _isLoading = false;
+              _isRoleChecked = true;
+              _userRoleId = null;
             });
           }
         } else if (event == AuthChangeEvent.tokenRefreshed) {
-          // ✅ Токен обновился — перепроверяем роль
-          debugPrint('🔄 Токен обновлён');
+          debugPrint('🔄 Token refreshed');
           await _checkUserRole();
         }
       },
@@ -288,9 +272,10 @@ class _AuthGateState extends State<AuthGate> {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ Показываем загрузку
-    if (_isLoading) {
-      debugPrint('⏳ Загрузка...');
+    // ✅ ГЛАВНОЕ ИСПРАВЛЕНИЕ:
+    // Не рендерим НИЧЕГО, пока роль не проверена
+    if (_isLoading || !_isRoleChecked) {
+      debugPrint('⏳ Ждём проверки роли... (isLoading: $_isLoading, isRoleChecked: $_isRoleChecked)');
       return const Scaffold(
         backgroundColor: Color(0xFF363636),
         body: Center(
@@ -299,20 +284,21 @@ class _AuthGateState extends State<AuthGate> {
       );
     }
 
-    // ✅ Нет сессии → экран входа
-    if (!_isAuthenticated) {
-      debugPrint('🔐 Показываем LoginScreen');
+    // ✅ Нет сессии → вход
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) {
+      debugPrint('🔐 LoginScreen');
       return const LoginScreen();
     }
 
-    // ✅ Админ → админ-панель
-    if (_isAdmin) {
-      debugPrint('👑 Показываем AdminDashboardScreen');
+    // ✅ Админ → админка
+    if (_userRoleId == 3) {
+      debugPrint('👑 AdminDashboardScreen');
       return const AdminDashboardScreen();
     }
 
-    // ✅ Обычный пользователь → главный экран
-    debugPrint('👤 Показываем MainScreen');
+    // ✅ Все остальные → главный экран
+    debugPrint('👤 MainScreen (role_id: ${_userRoleId ?? "null"})');
     return const MainScreen();
   }
 }

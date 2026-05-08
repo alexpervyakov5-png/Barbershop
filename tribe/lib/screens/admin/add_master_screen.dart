@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../widgets/tribe_app_bar.dart';
+import '../../utils/error_handler.dart';
 
 class AddMasterScreen extends StatefulWidget {
   const AddMasterScreen({super.key});
@@ -31,18 +32,16 @@ class _AddMasterScreenState extends State<AddMasterScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // 1. Создаём пользователя через обычный signUp
-      // Триггер автоматически создаст запись в public.users с role_id = 1
+      // ✅ ВЫЗОВ signUp С ПРАВИЛЬНЫМИ ИМЕНОВАННЫМИ ПАРАМЕТРАМИ
       final authResponse = await Supabase.instance.client.auth.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text,
-        data: {'full_name': _nameController.text.trim()}, // ✅ Исправлено: data как именованный параметр
+        data: {'full_name': _nameController.text.trim()},
       );
 
       final newUserId = authResponse.user?.id;
       if (newUserId == null) throw Exception('Не удалось создать пользователя');
 
-      // 2. Обновляем роль на "Мастер" (2) и добавляем телефон
       await Supabase.instance.client
           .from('users')
           .update({
@@ -53,45 +52,47 @@ class _AddMasterScreenState extends State<AddMasterScreen> {
           })
           .eq('user_id', newUserId);
 
-      // 3. Выходим из сессии нового пользователя (админ останется в системе)
-      await Supabase.instance.client.auth.signOut();
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('✅ Мастер успешно добавлен'),
+            content: Text('✅ Мастер успешно создан'),
             backgroundColor: Colors.green,
           ),
         );
         Navigator.pop(context, true);
       }
-    } on AuthException catch (e) {
-      debugPrint('❌ Auth ошибка: ${e.message}');
-      
-      String message = 'Ошибка: ${e.message}';
-      if (e.message.contains('User already registered')) {
-        message = 'Пользователь с таким email уже существует';
-      }
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message), backgroundColor: Colors.red),
-        );
-      }
     } catch (e) {
-      debugPrint('❌ Ошибка создания мастера: $e');
+      ErrorHandler.logError('AddMasterScreen._createMaster', e);
+      
       if (mounted) {
-        String errorMsg = e.toString();
-        if (errorMsg.contains('42501')) {
-          errorMsg = 'Ошибка прав доступа. Выполните SQL-скрипт для обновления RLS.';
-        }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка: $errorMsg'), backgroundColor: Colors.red),
+        ErrorHandler.showErrorSnackBar(
+          context,
+          e,
+          customMessage: _getCustomErrorMessage(e),
         );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  String? _getCustomErrorMessage(dynamic error) {
+    final errorStr = error.toString().toLowerCase();
+    
+    if (errorStr.contains('user already registered')) {
+      return '👤 Пользователь с таким email уже существует';
+    }
+    if (errorStr.contains('invalid email')) {
+      return '📧 Некорректный email адрес';
+    }
+    if (errorStr.contains('weak password')) {
+      return '🔒 Пароль слишком слабый';
+    }
+    if (errorStr.contains('connection') || errorStr.contains('network')) {
+      return '📡 Ошибка подключения к интернету';
+    }
+    
+    return null;
   }
 
   @override
@@ -107,12 +108,17 @@ class _AddMasterScreenState extends State<AddMasterScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Новый мастер',
+                'Пригласить мастера',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 22,
                   fontWeight: FontWeight.w600,
                 ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Мастер получит доступ сразу после создания',
+                style: TextStyle(color: Colors.white54, fontSize: 14),
               ),
               const SizedBox(height: 32),
 
@@ -126,7 +132,7 @@ class _AddMasterScreenState extends State<AddMasterScreen> {
 
               _buildTextField(
                 controller: _emailController,
-                label: 'Email для входа',
+                label: 'Email мастера',
                 icon: Icons.email,
                 keyboardType: TextInputType.emailAddress,
                 validator: (v) {
@@ -147,7 +153,7 @@ class _AddMasterScreenState extends State<AddMasterScreen> {
 
               _buildTextField(
                 controller: _passwordController,
-                label: 'Пароль',
+                label: 'Пароль для входа',
                 icon: Icons.lock,
                 obscureText: true,
                 validator: (v) {

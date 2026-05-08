@@ -39,7 +39,7 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
       final response = await Supabase.instance.client
           .from('users')
           .select('user_id, full_name, email, phone, photo_url, is_active, created_at, raiting_avg')
-          .eq('role_id', 2)
+          .eq('role_id', 2) // Показываем только мастеров
           .order('created_at', ascending: false);
 
       if (mounted) {
@@ -64,7 +64,7 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(isActive ? 'Мастер активирован' : 'Мастер заблокирован'),
+            content: Text(isActive ? 'Мастер активирован' : 'Мастер деактивирован'),
             backgroundColor: isActive ? Colors.green : Colors.orange,
           ),
         );
@@ -73,10 +73,7 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Ошибка: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('Ошибка: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -131,7 +128,7 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
               child: ElevatedButton.icon(
                 onPressed: _addMaster,
                 icon: const Icon(Icons.add),
-                label: const Text('Добавить мастера'),
+                label: const Text('Пригласить мастера'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFD47926),
                   foregroundColor: Colors.white,
@@ -166,7 +163,7 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
                             email: master['email'],
                             phone: master['phone'],
                             photoUrl: master['photo_url'],
-                            isActive: master['is_active'] ?? true,
+                            isActive: master['is_active'] ?? false,
                             onToggleStatus: _toggleMasterStatus,
                           );
                         },
@@ -205,6 +202,7 @@ class _MasterCard extends StatelessWidget {
         color: const Color(0xFF444444),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
+          // ✅ Если не активен — красная рамка
           color: isActive ? Colors.transparent : Colors.red.withOpacity(0.3),
         ),
       ),
@@ -237,6 +235,7 @@ class _MasterCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
+                    // ✅ Бейдж статуса
                     if (!isActive)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -245,8 +244,20 @@ class _MasterCard extends StatelessWidget {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: const Text(
-                          'Заблокирован',
+                          'Ожидает подтверждения',
                           style: TextStyle(color: Colors.red, fontSize: 11),
+                        ),
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'Активен',
+                          style: TextStyle(color: Colors.green, fontSize: 11),
                         ),
                       ),
                   ],
@@ -258,6 +269,7 @@ class _MasterCard extends StatelessWidget {
               ],
             ),
           ),
+          // ✅ Переключатель активности (подтверждение админом)
           Switch(
             value: isActive,
             onChanged: (value) => onToggleStatus(masterId, value),
