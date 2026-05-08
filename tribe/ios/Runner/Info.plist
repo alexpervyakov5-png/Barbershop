@@ -45,5 +45,34 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<!-- 🔹 Разрешения для карты и навигации -->
+	
+	<!-- Доступ к местоположению (для кнопки "Я рядом") -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Приложению нужен доступ к местоположению, чтобы показать ближайшие барбершопы и построить маршрут</string>
+	
+	<!-- Доступ к местоположению в фоне (опционально, если нужно) -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Приложению нужен доступ к местоположению для работы навигации</string>
+
+	<!-- 🔹 Разрешения для открытия внешних приложений навигации -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>googlemaps</string>
+		<string>yandexmaps</string>
+		<string>yandexnavi</string>
+		<string>dgis</string>
+		<string>citymapper</string>
+		<string>mapswithme</string>
+		<string>osmandmaps</string>
+		<string>geo</string>
+	</array>
+
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
