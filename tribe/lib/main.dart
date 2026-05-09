@@ -12,6 +12,7 @@ import 'screens/place_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/master_works_screen.dart';
 import 'screens/admin/admin_dashboard_screen.dart';
+import 'screens/master/master_home_screen.dart'; // ✅ Добавлен импорт
 
 // Экраны авторизации
 import 'auth/login_screen.dart';
@@ -83,6 +84,7 @@ class MyApp extends StatelessWidget {
         '/register': (context) => const RegisterScreen(),
         '/profile': (context) => const ProfileScreen(),
         '/admin': (context) => const AdminDashboardScreen(),
+        '/master-home': (context) => const MasterHomeScreen(), // ✅ Добавлен маршрут для мастера
         '/master-works': (context) {
           final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
           return MasterWorksScreen(
@@ -210,10 +212,17 @@ class _AuthGateState extends State<AuthGate> {
       });
 
       // ✅ Навигация ТОЛЬКО после того, как роль сохранена в state
-      if (roleId == 3 && mounted) {
-        debugPrint('👑 Админ найден, перенаправляем...');
-        // Используем pushReplacement чтобы убрать AuthGate из стека
-        Navigator.of(context).pushReplacementNamed('/admin');
+      if (mounted) {
+        if (roleId == 3) {
+          // Администратор
+          debugPrint('👑 Админ найден, перенаправляем...');
+          Navigator.of(context).pushReplacementNamed('/admin');
+        } else if (roleId == 2) {
+          // ✅ Мастер
+          debugPrint('✂️ Мастер найден, перенаправляем...');
+          Navigator.of(context).pushReplacementNamed('/master-home');
+        }
+        // Клиенты (role_id == 1) остаются на главном экране
       }
 
     } catch (e) {
@@ -297,7 +306,13 @@ class _AuthGateState extends State<AuthGate> {
       return const AdminDashboardScreen();
     }
 
-    // ✅ Все остальные → главный экран
+    // ✅ Мастер → мастер-интерфейс
+    if (_userRoleId == 2) {
+      debugPrint('✂️ MasterHomeScreen');
+      return const MasterHomeScreen();
+    }
+
+    // ✅ Клиент → главный экран
     debugPrint('👤 MainScreen (role_id: ${_userRoleId ?? "null"})');
     return const MainScreen();
   }

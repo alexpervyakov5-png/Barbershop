@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../widgets/tribe_app_bar.dart';
+import '../../utils/error_handler.dart';
 
 class ManageServicesScreen extends StatefulWidget {
   const ManageServicesScreen({super.key});
@@ -21,6 +22,7 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
 
   Future<void> _loadServices() async {
     setState(() => _isLoading = true);
+    
     try {
       final response = await Supabase.instance.client
           .from('services')
@@ -34,8 +36,15 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
         });
       }
     } catch (e) {
-      debugPrint('❌ Ошибка загрузки услуг: $e');
-      if (mounted) setState(() => _isLoading = false);
+      ErrorHandler.logError('ManageServicesScreen._loadServices', e);
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ErrorHandler.showErrorSnackBar(
+          context,
+          e,
+          customMessage: 'Не удалось загрузить услуги',
+        );
+      }
     }
   }
 
@@ -49,17 +58,16 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(isActive ? 'Услуга активирована' : 'Услуга скрыта'),
+            content: Text(isActive ? '✅ Услуга активирована' : 'Услуга скрыта'),
             backgroundColor: isActive ? Colors.green : Colors.orange,
           ),
         );
         _loadServices();
       }
     } catch (e) {
+      ErrorHandler.logError('ManageServicesScreen._toggleServiceStatus', e);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка: $e'), backgroundColor: Colors.red),
-        );
+        ErrorHandler.showErrorSnackBar(context, e);
       }
     }
   }
@@ -202,7 +210,7 @@ class _ServiceCard extends StatelessWidget {
             value: isActive,
             onChanged: (value) => onToggleStatus(serviceId, value),
             activeColor: const Color(0xFFD47926),
-            activeTrackColor: const Color(0xFFD47926).withOpacity(0.3),
+            activeTrackColor: const Color(0xFFD47926).withValues(alpha: 0.3),
           ),
         ],
       ),
@@ -253,10 +261,12 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
         Navigator.pop(context, true);
       }
     } catch (e) {
-      debugPrint('❌ Ошибка: $e');
+      ErrorHandler.logError('AddServiceScreen._createService', e);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка: $e'), backgroundColor: Colors.red),
+        ErrorHandler.showErrorSnackBar(
+          context,
+          e,
+          customMessage: 'Не удалось создать услугу. Проверьте права доступа.',
         );
       }
     } finally {
@@ -285,6 +295,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                 ),
               ),
               const SizedBox(height: 32),
+
               TextFormField(
                 controller: _nameController,
                 style: const TextStyle(color: Colors.white),
@@ -302,6 +313,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                 validator: (v) => v?.isEmpty ?? true ? 'Введите название' : null,
               ),
               const SizedBox(height: 16),
+
               TextFormField(
                 controller: _descriptionController,
                 style: const TextStyle(color: Colors.white),
@@ -319,6 +331,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                 maxLines: 3,
               ),
               const SizedBox(height: 40),
+
               SizedBox(
                 width: double.infinity,
                 height: 54,
