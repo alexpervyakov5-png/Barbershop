@@ -4,6 +4,7 @@ import '../../widgets/tribe_app_bar.dart';
 import 'master_services_screen.dart';
 import 'master_works_screen.dart';
 import 'master_availability_screen.dart';
+// ✅ УДАЛЕНО: import 'master_profile_screen.dart';
 
 class MasterHomeScreen extends StatefulWidget {
   const MasterHomeScreen({super.key});
@@ -17,6 +18,7 @@ class _MasterHomeScreenState extends State<MasterHomeScreen> {
   String? _masterName;
   String? _masterId;
 
+  // ✅ Теперь только 3 страницы
   final List<Widget> _pages = [];
 
   @override
@@ -32,7 +34,7 @@ class _MasterHomeScreenState extends State<MasterHomeScreen> {
 
       final response = await Supabase.instance.client
           .from('users')
-          .select('user_id, full_name')
+          .select('user_id, full_name, master_rank')
           .eq('user_id', userId)
           .maybeSingle();
 
@@ -41,11 +43,12 @@ class _MasterHomeScreenState extends State<MasterHomeScreen> {
           _masterId = response['user_id'];
           _masterName = response['full_name'] ?? 'Мастер';
           
-          // Инициализируем страницы после загрузки данных
+          // ✅ Только 3 вкладки: Сервисы, Работы, Доступность
           _pages.addAll([
             MasterServicesScreen(masterId: _masterId!),
             MasterWorksScreen(masterId: _masterId!, masterName: _masterName!),
             const MasterAvailabilityScreen(),
+            // ✅ УДАЛЕНО: MasterProfileScreen
           ]);
         });
       }
@@ -56,8 +59,7 @@ class _MasterHomeScreenState extends State<MasterHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Показываем загрузку пока данные не загружены
-    if (_masterId == null) {
+    if (_masterId == null || _pages.isEmpty) {
       return const Scaffold(
         backgroundColor: Color(0xFF363636),
         body: Center(child: CircularProgressIndicator(color: Colors.white)),
@@ -66,7 +68,7 @@ class _MasterHomeScreenState extends State<MasterHomeScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF363636),
-      appBar: const TribeAppBar(),
+      appBar: const TribeAppBar(), // ✅ Профиль доступен через иконку здесь
       body: _pages[_currentIndex],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
@@ -89,10 +91,11 @@ class _MasterHomeScreenState extends State<MasterHomeScreen> {
             label: 'Работы',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.schedule_outlined),  // ✅ Иконка доступности
+            icon: Icon(Icons.schedule_outlined),
             activeIcon: Icon(Icons.schedule),
             label: 'Доступность',
           ),
+          // ✅ УДАЛЕНО: 4-я вкладка "Профиль"
         ],
       ),
     );

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../widgets/tribe_app_bar.dart';
+import '../utils/error_handler.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -45,7 +46,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             services (name),
             users!appointments_barber_id_fkey (full_name)
           ''')
-          .eq('polzovatel_id', userId)
+          .eq('client_id', userId) // ✅ ИСПРАВЛЕНО: client_id вместо polzovatel_id
           .order('start_datetime', ascending: _activeTab == 'upcoming');
 
       if (!mounted) return;
@@ -58,9 +59,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
       setState(() => _isLoading = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка загрузки: $e')),
-        );
+        ErrorHandler.showErrorSnackBar(context, e);
       }
     }
   }
@@ -95,10 +94,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final dt = DateTime.parse(dateTimeStr);
     const weekdays = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
     final weekday = weekdays[dt.weekday - 1];
-    return '$weekday, ${dt.day} мая, ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    const months = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+    return '$weekday, ${dt.day} ${months[dt.month - 1]}, ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   }
 
-  // ✅ Статический метод для получения цвета статуса
   static Color _getStatusColor(String status) {
     switch (status) {
       case 'забронировано':
@@ -112,6 +111,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  /// ✅ ИСПРАВЛЕНО: Устойчивый выход из аккаунта
+  Future<void> _signOut() async {
+    try {
+      await Supabase.instance.client.auth.signOut();
+    } on AuthRetryableFetchException catch (e) {
+      // ⚠️ Сетевая ошибка — не блокируем выход!
+      debugPrint('⚠️ Network error during signOut: $e');
+      await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+    } on AuthException catch (e) {
+      debugPrint('⚠️ Auth error during signOut: $e');
+      await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+    } catch (e) {
+      debugPrint('⚠️ Unexpected error during signOut: $e');
+      await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+    } finally {
+      // ✅ В ЛЮБОМ СЛУЧАЕ навигируем на экран входа
+      if (mounted) {
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/login',
+          (route) => false,
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -121,7 +145,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ? const Center(child: CircularProgressIndicator(color: Colors.white))
           : Column(
               children: [
-                // 👤 Профиль пользователя
                 Container(
                   padding: const EdgeInsets.all(24),
                   decoration: const BoxDecoration(
@@ -184,8 +207,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ],
                   ),
                 ),
-
-                // 📋 Табы
                 Padding(
                   padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
                   child: Container(
@@ -267,8 +288,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                 ),
-
-                // 📅 Список записей
                 Expanded(
                   child: _appointments.isEmpty
                       ? Center(
@@ -340,23 +359,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           },
                         ),
                 ),
-
-                // 🔘 Кнопка выхода
                 Padding(
                   padding: const EdgeInsets.all(24),
                   child: SizedBox(
                     width: double.infinity,
                     height: 54,
                     child: OutlinedButton(
-                      onPressed: () async {
-                        await Supabase.instance.client.auth.signOut();
-                        if (!mounted) return;
-                        if (!context.mounted) return;
-                        Navigator.of(context).pushNamedAndRemoveUntil(
-                          '/login',
-                          (route) => false,
-                        );
-                      },
+                      onPressed: _isLoading ? null : _signOut,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white,
                         side: const BorderSide(color: Colors.white54),
@@ -412,8 +421,6 @@ class _AppointmentCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isCancelled = status == 'отменено';
     final isCompleted = status == 'завершено';
-
-    // ✅ Используем статический метод из родительского класса
     final statusColor = _ProfileScreenState._getStatusColor(status);
 
     return Container(
@@ -425,7 +432,7 @@ class _AppointmentCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
         border: Border.all(
           color: isCancelled
-              ? Colors.red.withValues(alpha: 0.3) // ✅ Исправлено: withValues вместо withOpacity
+              ? Colors.red.withValues(alpha: 0.3)
               : isCompleted
                   ? Colors.white24
                   : Colors.transparent,

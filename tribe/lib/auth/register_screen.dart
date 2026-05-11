@@ -33,7 +33,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // ✅ Исправлено: data передаётся как именованный параметр
       final authResponse = await Supabase.instance.client.auth.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text,
@@ -69,9 +68,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SnackBar(
             content: Text('✅ Регистрация успешна'),
             backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
           ),
         );
-        Navigator.pop(context);
+        // ✅ ИСПРАВЛЕНО: НЕ делаем Navigator.pop()!
+        // StreamBuilder сам переключит экран после события signedIn
       }
     } on AuthException catch (e) {
       String message = 'Ошибка: ${e.message}';
@@ -121,7 +122,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 style: TextStyle(color: Colors.white54, fontSize: 14),
               ),
               const SizedBox(height: 32),
-
               TextFormField(
                 controller: _nameController,
                 style: const TextStyle(color: Colors.white),
@@ -139,7 +139,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 validator: (v) => v?.isEmpty ?? true ? 'Введите имя' : null,
               ),
               const SizedBox(height: 16),
-
               TextFormField(
                 controller: _emailController,
                 style: const TextStyle(color: Colors.white),
@@ -162,7 +161,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 },
               ),
               const SizedBox(height: 16),
-
               TextFormField(
                 controller: _phoneController,
                 style: const TextStyle(color: Colors.white),
@@ -180,7 +178,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-
               TextFormField(
                 controller: _passwordController,
                 style: const TextStyle(color: Colors.white),
@@ -214,9 +211,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 '• Минимум 6 символов',
                 style: TextStyle(color: Colors.white54, fontSize: 12),
               ),
-
               const SizedBox(height: 40),
-
               SizedBox(
                 width: double.infinity,
                 height: 54,
@@ -244,11 +239,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                 ),
               ),
-
               const SizedBox(height: 24),
-
               Center(
                 child: TextButton(
+                  // ✅ Для кнопки "Войти" можно оставить pop(), т.к. это явный переход
                   onPressed: () => Navigator.pop(context),
                   child: const Text(
                     'Уже есть аккаунт? Войти',

@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart';
 
 import '../widgets/tribe_app_bar.dart';
+import '../utils/error_handler.dart';
 
 class AppointmentTimeScreen extends StatefulWidget {
   final String masterId;
@@ -46,6 +48,12 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
     'Вечер': ['18:00', '19:00', '19:45', '20:00'],
   };
 
+  // ✅ Динамические названия месяцев
+  static const _months = [
+    'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+    'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -68,33 +76,34 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
         });
       }
     } catch (e) {
+      ErrorHandler.logError('AppointmentTimeScreen._loadAvailability', e);
       if (mounted) {
         setState(() => _isLoading = false);
+        ErrorHandler.showErrorSnackBar(context, e);
       }
-      debugPrint('Ошибка загрузки доступности: $e');
     }
   }
 
-  // ✅ Исправленная логика: строгая проверка пересечений по времени
+  // ✅ Исправленная логика: работа с таблицей availability по датам
   Future<Map<DateTime, List<String>>> _fetchAvailableSlots(
     String barberId,
     DateTime day,
     int durationMinutes,
   ) async {
     try {
-      final dateString = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+      final dateString = DateFormat('yyyy-MM-dd').format(day);
       
+      // ✅ 1. Загружаем доступность мастера на КОНКРЕТНУЮ ДАТУ
       final availabilityResponse = await Supabase.instance.client
           .from('availability')
           .select('start_time, end_time')
           .eq('barber_id', barberId)
           .eq('date', dateString)
-          .eq('is_available', true)
-          .order('start_time');
+          .eq('is_available', true);
 
       if (availabilityResponse.isEmpty) return {};
 
-      // Загружаем уже забронированные слоты
+      // ✅ 2. Загружаем уже забронированные слоты на эту дату
       final appointmentsResponse = await Supabase.instance.client
           .from('appointments')
           .select('start_datetime, end_datetime')
@@ -136,7 +145,7 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
           final candidateStart = DateTime(day.year, day.month, day.day, currH, currM);
           final candidateEnd = candidateStart.add(Duration(minutes: durationMinutes));
 
-          // 1. Если запись не помещается в рабочий слот мастера -> останавливаем генерацию для этого слота
+          // 1. Если запись не помещается в рабочий слот мастера -> останавливаем генерацию
           if (candidateEnd.isAfter(workSlotEndDt)) break;
 
           // 2. Проверяем пересечение с существующими записями
@@ -165,7 +174,7 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
       return {normalizedDay: availableSlots};
       
     } catch (e) {
-      debugPrint('Ошибка при загрузке слотов: $e');
+      ErrorHandler.logError('AppointmentTimeScreen._fetchAvailableSlots', e);
       return {};
     }
   }
@@ -235,14 +244,14 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
         throw Exception('Пользователь не авторизован');
       }
 
+      // ✅ ИСПРАВЛЕНО: используем client_id вместо polzovatel_id
       await Supabase.instance.client.from('appointments').insert({
-        'polzovatel_id': userId,
+        'client_id': userId,
         'barber_id': widget.masterId,
         'service_id': widget.serviceId,
         'start_datetime': selectedDateTime.toIso8601String(),
         'end_datetime': endDateTime.toIso8601String(),
         'status': 'забронировано',
-        'created_at': DateTime.now().toIso8601String(),
       });
 
       if (mounted) {
@@ -257,7 +266,7 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
               children: [
                 Text('Мастер: ${widget.masterName}', style: const TextStyle(color: Colors.white70)),
                 const SizedBox(height: 8),
-                Text('Дата: ${_selectedDay.day} мая', style: const TextStyle(color: Colors.white70)),
+                Text('Дата: ${_formatDate(_selectedDay)}', style: const TextStyle(color: Colors.white70)),
                 const SizedBox(height: 8),
                 Text('Время: $_selectedTime', style: const TextStyle(color: Colors.white70)),
                 const SizedBox(height: 8),
@@ -268,8 +277,9 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
             actions: [
               TextButton(
                 onPressed: () {
-                  Navigator.pop(context);
-                  Navigator.pop(context);
+                  Navigator.pop(context); // Закрыть диалог
+                  Navigator.pop(context); // Закрыть экран выбора времени
+                  // Возвращаемся к списку услуг или главному экрану
                 },
                 child: const Text('OK', style: TextStyle(color: Colors.white)),
               ),
@@ -278,13 +288,12 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
         );
       }
     } catch (e) {
-      debugPrint('Ошибка при создании записи: $e');
+      ErrorHandler.logError('AppointmentTimeScreen._confirmBooking', e);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Ошибка при создании записи: $e'),
-            backgroundColor: Colors.red,
-          ),
+        ErrorHandler.showErrorSnackBar(
+          context,
+          e,
+          customMessage: 'Не удалось создать запись. Попробуйте снова.',
         );
       }
     }
@@ -526,9 +535,11 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
     );
   }
 
+  // ✅ ИСПРАВЛЕНО: динамический месяц вместо хардкода "мая"
   String _formatDate(DateTime date) {
     const weekdays = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
     final weekday = weekdays[date.weekday - 1];
-    return '$weekday, ${date.day} мая';
+    final month = _months[date.month - 1];
+    return '$weekday, ${date.day} $month';
   }
 }

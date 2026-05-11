@@ -1,9 +1,8 @@
-// lib/screens/auth/login_screen.dart
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
-import '../auth/register_screen.dart';
-import '/main.dart'; // ← возврат к основному экрану
+import 'package:tribe/main.dart';
+import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -39,42 +38,70 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       setState(() => _isLoading = true);
 
+      // 1. Выполняем вход
       await Supabase.instance.client.auth.signInWithPassword(
         email: email,
         password: password,
       );
 
-      // Создаём профиль, если его нет
-      final userId = Supabase.instance.client.auth.currentSession!.user.id;
-      final existing = await Supabase.instance.client
-          .from('users')
-          .select('user_id')
-          .eq('user_id', userId)
-          .maybeSingle();
+      // 2. Создаём профиль, если нет
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId != null) {
+        final existing = await Supabase.instance.client
+            .from('users')
+            .select('user_id')
+            .eq('user_id', userId)
+            .maybeSingle();
 
-      if (existing == null) {
-        final fullName = email.split('@')[0];
-        await Supabase.instance.client.from('users').insert({
-          'user_id': userId,
-          'full_name': fullName,
-          'role_id': 1, // клиент
-          'email': email,
-          'phone': '',
-          'raiting_avg': 0.0,
-          'photo_url': '',
-          'created_at': DateTime.now().toIso8601String(),
-        });
+        if (existing == null) {
+          final fullName = email.split('@')[0];
+          await Supabase.instance.client.from('users').insert({
+            'user_id': userId,
+            'full_name': fullName,
+            'role_id': 1,
+            'email': email,
+            'phone': '',
+            'photo_url': '',
+            'created_at': DateTime.now().toIso8601String(),
+          });
+        }
       }
 
+      // 3. ✅ ЖДЁМ 1.5 секунды, чтобы сессия точно сохранилась
+      await Future.delayed(const Duration(milliseconds: 1500));
+
+      // 4. ✅ ПРОВЕРЯЕМ, что сессия действительно есть
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) {
+        throw Exception('Сессия не создана');
+      }
+
+      debugPrint('✅ Session confirmed: ${session.user.id}');
+
+      // 5. ✅ ЯВНО переходим на экран загрузки (который проверит роль)
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const RoleCheckScreen()),
+        );
+      }
+
+    } on SocketException {
       if (!mounted) return;
-      // Возврат к основному экрану приложения
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const MainScreen()),
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('❌ Ошибка сети. Проверьте интернет.'),
+          backgroundColor: Colors.red,
+        ),
       );
     } on AuthException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Ошибка: ${e.message}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ошибка: $e')),
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);

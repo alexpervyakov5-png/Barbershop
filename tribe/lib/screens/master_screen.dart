@@ -10,17 +10,35 @@ class MasterScreen extends StatelessWidget {
 
   Future<List<Map<String, dynamic>>> _fetchBarbers() async {
     try {
+      // ✅ ИСПРАВЛЕНО: убираем raiting_avg из select и order
       final response = await Supabase.instance.client
           .from('users')
-          .select('user_id, full_name, raiting_avg, photo_url')
+          .select('user_id, full_name, photo_url, master_rank')
           .eq('role_id', 2)
           .eq('is_active', true)
-          .order('raiting_avg', ascending: false);
+          .order('created_at', ascending: false); // Сортировка по дате добавления
 
       final List<Map<String, dynamic>> masters = List<Map<String, dynamic>>.from(response);
+      
+      // ✅ Если нужен рейтинг — загружаем его отдельно из reviews (опционально)
+      // for (var m in masters) {
+      //   final reviews = await Supabase.instance.client
+      //       .from('reviews')
+      //       .select('rating')
+      //       .eq('master_id', m['user_id']);
+      //   final avg = reviews.isNotEmpty 
+      //       ? reviews.map((r) => r['rating'] as int).reduce((a, b) => a + b) / reviews.length 
+      //       : 0.0;
+      //   m['review_count'] = reviews.length;
+      //   m['raiting_avg'] = avg;
+      // }
+      
+      // ✅ Пока добавляем заглушки для совместимости с UI
       for (var m in masters) {
-        m['review_count'] = 31;
+        m['review_count'] = 0;
+        m['raiting_avg'] = 0.0;
       }
+      
       return masters;
     } on PostgrestException catch (e) {
       ErrorHandler.logError('MasterScreen._fetchBarbers', e);
@@ -72,7 +90,6 @@ class MasterScreen extends StatelessWidget {
                     const SizedBox(height: 24),
                     ElevatedButton.icon(
                       onPressed: () {
-                        // Перезагрузка экрана
                         Navigator.of(context).pop();
                         Navigator.push(
                           context,
@@ -121,7 +138,7 @@ class MasterScreen extends StatelessWidget {
                 photoUrl: b['photo_url'],
                 rating: (b['raiting_avg'] ?? 0.0).toDouble(),
                 reviewCount: b['review_count'] ?? 0,
-                position: index == 0 ? 'Основатель' : 'Барбер',
+                position: b['master_rank'] ?? (index == 0 ? 'Основатель' : 'Барбер'),
               );
             },
           );
@@ -189,9 +206,10 @@ class _MasterCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 4),
+                      // ✅ Показываем ранг мастера
                       Text(
                         position,
-                        style: const TextStyle(color: Colors.white54, fontSize: 13),
+                        style: const TextStyle(color: Color(0xFFD47926), fontSize: 13, fontWeight: FontWeight.w500),
                       ),
                       const SizedBox(height: 12),
                       GestureDetector(

@@ -1,8 +1,7 @@
-// lib/utils/profile_bottom_sheet.dart
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../auth/login_screen.dart';
-import '../utils/error_handler.dart';  // ✅ Импортируем ErrorHandler
+// ✅ Удалён неиспользуемый импорт: '../auth/login_screen.dart';
+import '../utils/error_handler.dart';
 
 void showProfileBottomSheet(BuildContext context) {
   showModalBottomSheet(
@@ -24,11 +23,11 @@ class ProfileBottomSheetContent extends StatefulWidget {
 }
 
 class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
-  late final Future<Map<String, dynamic>?> _userData;  // ✅ Может быть null
+  late final Future<Map<String, dynamic>?> _userData;
   final _fullNameController = TextEditingController();
   final _phoneController = TextEditingController();
   bool _isEditing = false;
-  bool _isLoading = false;  // ✅ Индикатор загрузки
+  bool _isLoading = false;
 
   @override
   void initState() {
@@ -46,14 +45,14 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
   Future<Map<String, dynamic>?> _loadUserData() async {
     try {
       final session = Supabase.instance.client.auth.currentSession;
-      if (session == null) return null;  // ✅ Безопасная проверка
+      if (session == null) return null;
       
       final userId = session.user.id;
       final response = await Supabase.instance.client
           .from('users')
           .select('full_name, email, phone, photo_url')
           .eq('user_id', userId)
-          .maybeSingle();  // ✅ Возвращает null если не найдено
+          .maybeSingle();
 
       if (response != null) {
         _fullNameController.text = response['full_name'] ?? '';
@@ -62,8 +61,8 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
 
       return response;
     } catch (e) {
-      ErrorHandler.logError('ProfileBottomSheet._loadUserData', e);  // ✅ Логирование
-      return null;  // ✅ Возвращаем null вместо падения
+      ErrorHandler.logError('ProfileBottomSheet._loadUserData', e);
+      return null;
     }
   }
 
@@ -102,7 +101,7 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
     } catch (e) {
       ErrorHandler.logError('ProfileBottomSheet._saveProfile', e);
       if (mounted) {
-        ErrorHandler.showErrorSnackBar(  // ✅ Показываем понятную ошибку
+        ErrorHandler.showErrorSnackBar(
           context,
           e,
           customMessage: 'Не удалось сохранить профиль',
@@ -118,18 +117,24 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
     
     try {
       await Supabase.instance.client.auth.signOut();
-      if (!context.mounted) return;
-      
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-        (route) => false,
-      );
+    } on AuthRetryableFetchException catch (e) {
+      debugPrint('⚠️ Network error during signOut: $e');
+      await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+    } on AuthException catch (e) {
+      debugPrint('⚠️ Auth error during signOut: $e');
+      await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
     } catch (e) {
-      ErrorHandler.logError('ProfileBottomSheet._signOut', e);
-      if (context.mounted) {
-        ErrorHandler.showErrorSnackBar(context, e);
-      }
+      debugPrint('⚠️ Unexpected error during signOut: $e');
+      await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+    } finally {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) {
+          Navigator.of(context).pushNamedAndRemoveUntil(
+            '/login',
+            (route) => false,
+          );
+        }
+      });
     }
   }
 
@@ -141,7 +146,6 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Заголовок
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -176,8 +180,6 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
             ],
           ),
           const SizedBox(height: 20),
-
-          // Иконка профиля
           Center(
             child: Container(
               width: 60,
@@ -185,15 +187,14 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
               decoration: BoxDecoration(
                 color: const Color(0xFF444444),
                 shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+                // ✅ ИСПРАВЛЕНО: withValues вместо withOpacity
+                border: Border.all(color: Colors.white.withValues(alpha: 0.3), width: 1),
               ),
               child: const Icon(Icons.person, color: Colors.white, size: 30),
             ),
           ),
           const SizedBox(height: 16),
-
-          // Данные пользователя
-          FutureBuilder<Map<String, dynamic>?>(  // ✅ Тип может быть null
+          FutureBuilder<Map<String, dynamic>?>(
             future: _userData,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -214,7 +215,7 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
                       const Icon(Icons.error_outline, color: Colors.red, size: 40),
                       const SizedBox(height: 8),
                       Text(
-                        ErrorHandler.getErrorMessage(snapshot.error),  // ✅ Понятное сообщение
+                        ErrorHandler.getErrorMessage(snapshot.error),
                         style: const TextStyle(color: Colors.red),
                         textAlign: TextAlign.center,
                       ),
@@ -229,7 +230,7 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
               }
 
               final user = snapshot.data;
-              if (user == null) {  // ✅ Проверка на null
+              if (user == null) {
                 return const Padding(
                   padding: EdgeInsets.all(20),
                   child: Text('Не удалось загрузить данные', style: TextStyle(color: Colors.grey)),
@@ -244,8 +245,6 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
                     style: const TextStyle(color: Colors.grey, fontSize: 14),
                   ),
                   const SizedBox(height: 16),
-
-                  // Имя
                   if (_isEditing)
                     TextField(
                       controller: _fullNameController,
@@ -268,10 +267,7 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
                       _fullNameController.text.isEmpty ? '—' : _fullNameController.text,
                       style: const TextStyle(color: Colors.white, fontSize: 18),
                     ),
-
                   const SizedBox(height: 12),
-
-                  // Телефон
                   if (_isEditing)
                     TextField(
                       controller: _phoneController,
@@ -299,10 +295,7 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
               );
             },
           ),
-
           const Spacer(),
-
-          // Кнопка выхода
           TextButton(
             onPressed: _isLoading ? null : _signOut,
             child: const Text(

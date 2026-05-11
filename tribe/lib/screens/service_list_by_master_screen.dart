@@ -1,57 +1,69 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../utils/error_handler.dart';
 import 'appointment_time_screen.dart';
 
 class ServiceListByMasterScreen extends StatelessWidget {
   final String barberId;
   final String masterName;
-  final List<int>? selectedServiceIds;
+  final List<int> selectedServiceIds; // ✅ Обязательно: пользователь уже выбрал услуги
 
   const ServiceListByMasterScreen({
     super.key,
     required this.barberId,
-    this.masterName = 'Мастер',
-    this.selectedServiceIds,
+    required this.masterName,
+    required this.selectedServiceIds,
   });
 
-  Future<List<Map<String, dynamic>>> _fetchServicesForBarber() async {
-    final response = await Supabase.instance.client
-        .from('barber_services')
-        .select('service_id, price, duration_min')
-        .eq('barber_id', barberId);
+  Future<List<Map<String, dynamic>>> _fetchSelectedServices() async {
+    if (selectedServiceIds.isEmpty) return [];
 
-    if (response.isEmpty) return [];
+    try {
+      // ✅ Загружаем ТОЛЬКО те услуги, которые выбрал пользователь + цены мастера
+      final response = await Supabase.instance.client
+          .from('master_services')
+          .select('service_id, price, duration_min')
+          .eq('barber_id', barberId)
+          .inFilter('service_id', selectedServiceIds);
 
-    final serviceIds = response.map((e) => e['service_id'] as int).toList();
-    final servicesResponse = await Supabase.instance.client
-        .from('services')
-        .select('service_id, name')
-        .inFilter('service_id', serviceIds);
+      if (response.isEmpty) return [];
 
-    final Map<int, String> serviceNames = {};
-    for (var s in servicesResponse) {
-      serviceNames[s['service_id'] as int] = s['name'] as String;
+      // Загружаем названия услуг
+      final servicesResponse = await Supabase.instance.client
+          .from('services')
+          .select('service_id, name, description')
+          .inFilter('service_id', selectedServiceIds);
+
+      final Map<int, String> serviceNames = {};
+      final Map<int, String> serviceDesc = {};
+      for (var s in servicesResponse) {
+        serviceNames[s['service_id'] as int] = s['name'] as String;
+        serviceDesc[s['service_id'] as int] = s['description'] as String? ?? '';
+      }
+
+      // Собираем финальный список
+      final result = response.map((item) {
+        final serviceId = item['service_id'] as int;
+        return {
+          'service_id': serviceId,
+          'name': serviceNames[serviceId] ?? 'Услуга',
+          'description': serviceDesc[serviceId],
+          'price': item['price'],
+          'duration_min': item['duration_min'] ?? 60,
+        };
+      }).toList();
+
+      // Сортировка по порядку выбора (опционально)
+      result.sort((a, b) => 
+        selectedServiceIds.indexOf(a['service_id'])
+            .compareTo(selectedServiceIds.indexOf(b['service_id']))
+      );
+
+      return result;
+    } catch (e) {
+      ErrorHandler.logError('ServiceListByMasterScreen._fetchSelectedServices', e);
+      rethrow;
     }
-
-    final allServices = response.map((item) {
-      final serviceId = item['service_id'] as int;
-      return {
-        'service_id': serviceId,
-        'name': serviceNames[serviceId] ?? 'Услуга',
-        'price': item['price'],
-        'duration_min': item['duration_min'] ?? 0,
-      };
-    }).toList();
-
-    allServices.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
-
-    if (selectedServiceIds != null && selectedServiceIds!.isNotEmpty) {
-      return allServices
-          .where((s) => selectedServiceIds!.contains(s['service_id'] as int))
-          .toList();
-    }
-
-    return allServices;
   }
 
   @override
@@ -65,44 +77,128 @@ class ServiceListByMasterScreen extends StatelessWidget {
           style: const TextStyle(color: Colors.white),
         ),
         centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
       body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: _fetchServicesForBarber(),
+        future: _fetchSelectedServices(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: Colors.white));
           }
           if (snapshot.hasError) {
+            ErrorHandler.logError('ServiceListByMasterScreen.build', snapshot.error!);
             return Center(
-              child: Text(
-                'Ошибка: ${snapshot.error}',
-                style: const TextStyle(color: Colors.red),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.error_outline, size: 64, color: Colors.white54),
+                    const SizedBox(height: 16),
+                    Text(
+                      ErrorHandler.getErrorMessage(snapshot.error),
+                      style: const TextStyle(color: Colors.white54),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton.icon(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.arrow_back),
+                      label: const Text('Назад'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFD47926),
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           }
 
           final services = snapshot.data ?? [];
           if (services.isEmpty) {
-            final message = (selectedServiceIds != null && selectedServiceIds!.isNotEmpty)
-                ? 'Мастер не оказывает выбранные услуги'
-                : 'Нет услуг';
             return Center(
-              child: Text(message, style: const TextStyle(color: Colors.white70)),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.warning_amber_rounded, size: 64, color: Colors.orange),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Мастер не оказывает выбранные услуги',
+                    style: TextStyle(color: Colors.white70),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFD47926),
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('Выбрать другого мастера'),
+                  ),
+                ],
+              ),
             );
           }
 
+          // ✅ Считаем итоговую сумму и время
+          final totalPrice = services.fold<int>(
+            0,
+            (sum, s) => sum + ((s['price'] as num?)?.toInt() ?? 0),
+          );
           final totalDuration = services.fold<int>(
             0,
             (sum, s) => sum + (s['duration_min'] as int),
           );
 
-          final bool isSingle = selectedServiceIds != null && selectedServiceIds!.length == 1;
-          final int? sid = isSingle ? selectedServiceIds!.first : null;
-          final String? sname = (isSingle && services.isNotEmpty) ? services.first['name'] as String? : null;
-          final int? sdur = (isSingle && services.isNotEmpty) ? services.first['duration_min'] as int? : null;
-
           return Column(
             children: [
+              // Заголовок с итогом
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF444444),
+                  borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Выбранные услуги',
+                      style: TextStyle(color: Colors.white54, fontSize: 14),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '$totalDuration мин',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          '$totalPrice ₽',
+                          style: const TextStyle(
+                            color: Color(0xFFD47926),
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              // Список услуг (только просмотр, без выбора)
               Expanded(
                 child: ListView.separated(
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
@@ -110,14 +206,17 @@ class ServiceListByMasterScreen extends StatelessWidget {
                   separatorBuilder: (_, __) => const SizedBox(height: 12),
                   itemBuilder: (context, index) {
                     final s = services[index];
-                    return _ServiceCard(
+                    return _ServiceSummaryCard(
                       name: s['name'],
+                      description: s['description'],
                       price: s['price'],
                       duration: s['duration_min'],
                     );
                   },
                 ),
               ),
+
+              // Кнопка записи
               Container(
                 padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
                 color: const Color(0xFF363636),
@@ -126,17 +225,14 @@ class ServiceListByMasterScreen extends StatelessWidget {
                   height: 54,
                   child: ElevatedButton(
                     onPressed: () {
-                      Navigator.push(
+                      Navigator.pushReplacement(
                         context,
                         MaterialPageRoute(
                           builder: (_) => AppointmentTimeScreen(
                             masterId: barberId,
                             masterName: masterName,
                             serviceIds: selectedServiceIds,
-                            serviceId: sid,
-                            serviceName: sname,
                             totalDuration: totalDuration,
-                            duration: sdur,
                           ),
                         ),
                       );
@@ -150,7 +246,7 @@ class ServiceListByMasterScreen extends StatelessWidget {
                       elevation: 0,
                     ),
                     child: Text(
-                      'Записаться на $totalDuration мин',
+                      'Записаться на $totalDuration мин за $totalPrice ₽',
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w500,
@@ -167,13 +263,16 @@ class ServiceListByMasterScreen extends StatelessWidget {
   }
 }
 
-class _ServiceCard extends StatelessWidget {
+// ✅ Карточка только для просмотра (без чекбокса)
+class _ServiceSummaryCard extends StatelessWidget {
   final String name;
+  final String? description;
   final dynamic price;
   final int duration;
 
-  const _ServiceCard({
+  const _ServiceSummaryCard({
     required this.name,
+    required this.description,
     required this.price,
     required this.duration,
   });
@@ -189,14 +288,27 @@ class _ServiceCard extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(
-              name,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.3,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (description != null && description!.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    description!,
+                    style: TextStyle(color: Colors.white60, fontSize: 13),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
             ),
           ),
           Column(
@@ -204,21 +316,18 @@ class _ServiceCard extends StatelessWidget {
             children: [
               Text(
                 price != null 
-                    ? '${double.parse(price.toString()).toStringAsFixed(0)} ₽' 
+                    ? '${(price as num).toInt()} ₽' 
                     : '—',
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
               const SizedBox(height: 4),
               Text(
                 '$duration мин',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 13,
-                ),
+                style: TextStyle(color: Colors.white54, fontSize: 13),
               ),
             ],
           ),

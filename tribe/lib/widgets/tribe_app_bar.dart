@@ -1,7 +1,6 @@
-// lib/widgets/tribe_app_bar.dart
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
+import '../screens/master/master_profile_screen.dart';
 class TribeAppBar extends StatelessWidget implements PreferredSizeWidget {
   const TribeAppBar({super.key});
 
@@ -43,12 +42,47 @@ class TribeAppBar extends StatelessWidget implements PreferredSizeWidget {
       ),
       actions: [
         IconButton(
-          onPressed: () {
+          onPressed: () async {
+            // ✅ УМНАЯ НАВИГАЦИЯ: проверяем роль перед переходом
             final session = Supabase.instance.client.auth.currentSession;
-            if (session != null) {
-              Navigator.pushNamed(context, '/profile');
-            } else {
+            if (session == null) {
+              // Нет сессии → вход
               Navigator.pushNamed(context, '/login');
+              return;
+            }
+
+            try {
+              // Запрашиваем роль пользователя
+              final response = await Supabase.instance.client
+                  .from('users')
+                  .select('role_id')
+                  .eq('user_id', session.user.id)
+                  .maybeSingle();
+
+              final roleId = response?['role_id'] as int?;
+
+              // ✅ Открываем нужный профиль в зависимости от роли
+              if (roleId == 2) {
+                // Мастер → МастерПрофиль
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => MasterProfileScreen(
+                      masterId: session.user.id,
+                      masterName: session.user.userMetadata?['full_name'] ?? 'Мастер',
+                    ),
+                  ),
+                );
+              } else if (roleId == 3) {
+                // Админ → АдминПанель
+                Navigator.pushNamed(context, '/admin');
+              } else {
+                // Клиент → КлиентПрофиль
+                Navigator.pushNamed(context, '/profile');
+              }
+            } catch (e) {
+              // При ошибке — показываем обычный профиль
+              Navigator.pushNamed(context, '/profile');
             }
           },
           icon: const Icon(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../widgets/tribe_app_bar.dart';
+import '../utils/error_handler.dart';
 import 'master_list_screen.dart';
 import 'appointment_time_screen.dart';
 
@@ -44,8 +45,9 @@ class _ServiceScreenState extends State<ServiceScreen> {
       List<Map<String, dynamic>> services = [];
       
       if (widget.barberId != null) {
+        // ✅ ИСПРАВЛЕНО: master_services вместо barber_services
         final bsResponse = await Supabase.instance.client
-            .from('barber_services')
+            .from('master_services')
             .select('service_id, price, duration_min')
             .eq('barber_id', widget.barberId!)
             .timeout(const Duration(seconds: 10));
@@ -97,7 +99,7 @@ class _ServiceScreenState extends State<ServiceScreen> {
         _isLoading = false;
       });
     } catch (e) {
-      debugPrint('❌ Ошибка загрузки услуг: $e');
+      ErrorHandler.logError('ServiceScreen._loadServices', e);
       
       if (!mounted) return;
       setState(() => _isLoading = false);
@@ -108,16 +110,12 @@ class _ServiceScreenState extends State<ServiceScreen> {
         errorMessage = 'Проблема с подключением. Проверьте интернет.';
       } else if (e.toString().contains('timeout')) {
         errorMessage = 'Превышено время ожидания. Попробуйте снова.';
+      } else if (e.toString().contains('master_services')) {
+        errorMessage = 'Ошибка доступа к услугам. Попробуйте позже.';
       }
       
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMessage),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        ErrorHandler.showErrorSnackBar(context, e, customMessage: errorMessage);
       }
     }
   }

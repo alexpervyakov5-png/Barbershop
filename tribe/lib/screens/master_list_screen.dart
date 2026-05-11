@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../widgets/tribe_app_bar.dart';
-import 'service_screen.dart';
+import '../utils/error_handler.dart';
+import 'service_list_by_master_screen.dart'; // ✅ Импортируем правильный экран
 
 class MasterListScreen extends StatelessWidget {
   final List<int> serviceIds;
@@ -14,39 +15,48 @@ class MasterListScreen extends StatelessWidget {
   Future<List<Map<String, dynamic>>> _fetchMasters() async {
     if (serviceIds.isEmpty) return [];
 
-    final barberServicesResponse = await Supabase.instance.client
-        .from('barber_services')
-        .select('barber_id, service_id');
+    try {
+      // ✅ Используем master_services вместо barber_services
+      final barberServicesResponse = await Supabase.instance.client
+          .from('master_services')
+          .select('barber_id, service_id')
+          .inFilter('service_id', serviceIds);
 
-    if (barberServicesResponse.isEmpty) return [];
+      if (barberServicesResponse.isEmpty) return [];
 
-    final Map<String, int> barberCounts = {};
-    for (final row in barberServicesResponse) {
-      final barberId = row['barber_id'].toString();
-      final serviceId = row['service_id'] as int;
-      if (serviceIds.contains(serviceId)) {
-        barberCounts[barberId] = (barberCounts[barberId] ?? 0) + 1;
+      final Map<String, int> barberCounts = {};
+      for (final row in barberServicesResponse) {
+        final barberId = row['barber_id'].toString();
+        final serviceId = row['service_id'] as int;
+        if (serviceIds.contains(serviceId)) {
+          barberCounts[barberId] = (barberCounts[barberId] ?? 0) + 1;
+        }
       }
+
+      // Мастера, которые оказывают ВСЕ выбранные услуги
+      final List<String> qualifiedBarberIds = barberCounts.entries
+          .where((entry) => entry.value == serviceIds.length)
+          .map((entry) => entry.key)
+          .toList();
+
+      if (qualifiedBarberIds.isEmpty) return [];
+
+      // Загружаем данные мастеров
+      final mastersResponse = await Supabase.instance.client
+          .from('users')
+          .select('user_id, full_name, photo_url, master_rank')
+          .inFilter('user_id', qualifiedBarberIds)
+          .eq('role_id', 2);
+
+      final List<Map<String, dynamic>> masters = List<Map<String, dynamic>>.from(mastersResponse);
+      for (var m in masters) {
+        m['review_count'] = 0; // Заглушка, пока нет реальной логики отзывов
+      }
+      return masters;
+    } catch (e) {
+      ErrorHandler.logError('MasterListScreen._fetchMasters', e);
+      rethrow;
     }
-
-    final List<String> qualifiedBarberIds = barberCounts.entries
-        .where((entry) => entry.value == serviceIds.length)
-        .map((entry) => entry.key)
-        .toList();
-
-    if (qualifiedBarberIds.isEmpty) return [];
-
-    final mastersResponse = await Supabase.instance.client
-        .from('users')
-        .select('user_id, full_name, raiting_avg, photo_url')
-        .inFilter('user_id', qualifiedBarberIds)
-        .eq('role_id', 2);
-
-    final List<Map<String, dynamic>> masters = List<Map<String, dynamic>>.from(mastersResponse);
-    for (var m in masters) {
-      m['review_count'] = 31;
-    }
-    return masters;
   }
 
   @override
@@ -61,10 +71,32 @@ class MasterListScreen extends StatelessWidget {
             return const Center(child: CircularProgressIndicator(color: Colors.white));
           }
           if (snapshot.hasError) {
+            ErrorHandler.logError('MasterListScreen.build', snapshot.error!);
             return Center(
-              child: Text(
-                'Ошибка: ${snapshot.error}',
-                style: const TextStyle(color: Colors.red),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.error_outline, size: 64, color: Colors.white54),
+                    const SizedBox(height: 16),
+                    Text(
+                      ErrorHandler.getErrorMessage(snapshot.error),
+                      style: const TextStyle(color: Colors.white54),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton.icon(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.arrow_back),
+                      label: const Text('Назад'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFD47926),
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           }
@@ -89,10 +121,10 @@ class MasterListScreen extends StatelessWidget {
                 masterId: m['user_id'],
                 name: m['full_name'] ?? 'Мастер',
                 photoUrl: m['photo_url'],
-                rating: (m['raiting_avg'] ?? 0.0).toDouble(),
+                rating: 0.0, // Заглушка
                 reviewCount: m['review_count'] ?? 0,
-                position: index == 0 ? 'Основатель' : 'Барбер',
-                serviceIds: serviceIds,
+                position: m['master_rank'] ?? 'Барбер',
+                serviceIds: serviceIds, // ✅ Передаем выбранные услуги
               );
             },
           );
@@ -109,7 +141,7 @@ class _MasterCard extends StatelessWidget {
   final double rating;
   final int reviewCount;
   final String position;
-  final List<int> serviceIds;
+  final List<int> serviceIds; // ✅ Список выбранных услуг
 
   const _MasterCard({
     required this.masterId,
@@ -132,12 +164,14 @@ class _MasterCard extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: () {
+            // ✅ ИСПРАВЛЕНО: Переходим на экран подтверждения услуг, а не на выбор
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => ServiceScreen(
+                builder: (_) => ServiceListByMasterScreen(
                   barberId: masterId,
                   masterName: name,
+                  selectedServiceIds: serviceIds, // ✅ Передаем выбранные услуги
                 ),
               ),
             );
@@ -162,9 +196,10 @@ class _MasterCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 4),
+                      // ✅ Показываем ранг мастера
                       Text(
                         position,
-                        style: const TextStyle(color: Colors.white54, fontSize: 13),
+                        style: const TextStyle(color: Color(0xFFD47926), fontSize: 13, fontWeight: FontWeight.w500),
                       ),
                       const SizedBox(height: 12),
                       Row(
