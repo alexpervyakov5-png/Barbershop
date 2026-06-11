@@ -2,12 +2,58 @@ import 'package:flutter/material.dart';
 import 'manage_masters_screen.dart';
 import 'manage_services_screen.dart';
 import '../../widgets/tribe_app_bar.dart';
+import '../../utils/role_helper.dart';
 
-class AdminDashboardScreen extends StatelessWidget {
+class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
 
   @override
+  State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
+}
+
+class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+  bool _isAuthorized = false;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAdminRole();
+  }
+
+  Future<void> _checkAdminRole() async {
+    final isAdmin = await RoleHelper.requireAdmin();
+    
+    if (mounted) {
+      if (!isAdmin) {
+        Navigator.of(context).pushReplacementNamed('/');
+      } else {
+        setState(() {
+          _isAuthorized = true;
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF363636),
+        body: Center(child: CircularProgressIndicator(color: Colors.white)),
+      );
+    }
+
+    if (!_isAuthorized) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF363636),
+        body: Center(
+          child: Text('Доступ запрещен', style: TextStyle(color: Colors.red)),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFF363636),
       appBar: const TribeAppBar(),
@@ -32,7 +78,6 @@ class AdminDashboardScreen extends StatelessWidget {
             const SizedBox(height: 32),
 
             _buildActionCard(
-              context,
               title: 'Мастера',
               description: 'Добавлять, редактировать, блокировать',
               icon: Icons.person_add,
@@ -46,7 +91,6 @@ class AdminDashboardScreen extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             _buildActionCard(
-              context,
               title: 'Услуги',
               description: 'Создавать и редактировать каталог',
               icon: Icons.cut,
@@ -64,8 +108,7 @@ class AdminDashboardScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildActionCard(
-    BuildContext context, {
+  Widget _buildActionCard({
     required String title,
     required String description,
     required IconData icon,
@@ -86,7 +129,6 @@ class AdminDashboardScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                // ✅ Исправлено: withValues вместо withOpacity
                 color: color.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(10),
               ),

@@ -1,8 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../screens/master/master_profile_screen.dart';
+import '../screens/admin/admin_profile_screen.dart';
+import '../utils/cache_service.dart';
+
 class TribeAppBar extends StatelessWidget implements PreferredSizeWidget {
-  const TribeAppBar({super.key});
+  final bool showProfileIcon;
+
+  const TribeAppBar({
+    super.key,
+    this.showProfileIcon = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -41,57 +49,68 @@ class TribeAppBar extends StatelessWidget implements PreferredSizeWidget {
         ],
       ),
       actions: [
-        IconButton(
-          onPressed: () async {
-            // ✅ УМНАЯ НАВИГАЦИЯ: проверяем роль перед переходом
-            final session = Supabase.instance.client.auth.currentSession;
-            if (session == null) {
-              // Нет сессии → вход
-              Navigator.pushNamed(context, '/login');
-              return;
-            }
+        if (showProfileIcon)
+          IconButton(
+            onPressed: () async {
+              final session = Supabase.instance.client.auth.currentSession;
+              if (session == null) {
+                Navigator.pushNamed(context, '/login');
+                return;
+              }
 
-            try {
-              // Запрашиваем роль пользователя
-              final response = await Supabase.instance.client
-                  .from('users')
-                  .select('role_id')
-                  .eq('user_id', session.user.id)
-                  .maybeSingle();
+              try {
+                // 🔥 Кеширование роли пользователя
+                final cache = CacheService();
+                int? roleId = cache.get<int>('user_role_${session.user.id}');
 
-              final roleId = response?['role_id'] as int?;
+                if (roleId == null) {
+                  final response = await Supabase.instance.client
+                      .from('users')
+                      .select('role_id')
+                      .eq('user_id', session.user.id)
+                      .maybeSingle()
+                      .timeout(const Duration(seconds: 5));
 
-              // ✅ Открываем нужный профиль в зависимости от роли
-              if (roleId == 2) {
-                // Мастер → МастерПрофиль
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => MasterProfileScreen(
-                      masterId: session.user.id,
-                      masterName: session.user.userMetadata?['full_name'] ?? 'Мастер',
+                  roleId = response?['role_id'] as int?;
+
+                  if (roleId != null) {
+                    await cache.set('user_role_${session.user.id}', roleId,
+                        duration: const Duration(minutes: 30));
+                  }
+                }
+
+                if (roleId == 2) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => MasterProfileScreen(
+                        masterId: session.user.id,
+                        masterName: session.user.userMetadata?['full_name'] ?? 'Мастер',
+                      ),
                     ),
-                  ),
-                );
-              } else if (roleId == 3) {
-                // Админ → АдминПанель
-                Navigator.pushNamed(context, '/admin');
-              } else {
-                // Клиент → КлиентПрофиль
+                  );
+                } else if (roleId == 3) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const AdminProfileScreen(),
+                    ),
+                  );
+                } else {
+                  Navigator.pushNamed(context, '/profile');
+                }
+              } catch (e) {
+                debugPrint('❌ Ошибка получения роли: $e');
                 Navigator.pushNamed(context, '/profile');
               }
-            } catch (e) {
-              // При ошибке — показываем обычный профиль
-              Navigator.pushNamed(context, '/profile');
-            }
-          },
-          icon: const Icon(
-            Icons.person_outline,
-            color: Colors.white,
-            size: 26,
+            },
+            icon: const Icon(
+              Icons.person_outline,
+              color: Colors.white,
+              size: 26,
+            ),
+            padding: const EdgeInsets.only(right: 8),
           ),
-          padding: const EdgeInsets.only(right: 8),
-        ),
       ],
     );
   }

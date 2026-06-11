@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-// ✅ Удалён неиспользуемый импорт: '../auth/login_screen.dart';
 import '../utils/error_handler.dart';
 
 void showProfileBottomSheet(BuildContext context) {
@@ -187,7 +186,6 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
               decoration: BoxDecoration(
                 color: const Color(0xFF444444),
                 shape: BoxShape.circle,
-                // ✅ ИСПРАВЛЕНО: withValues вместо withOpacity
                 border: Border.all(color: Colors.white.withValues(alpha: 0.3), width: 1),
               ),
               child: const Icon(Icons.person, color: Colors.white, size: 30),
@@ -196,6 +194,7 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
           const SizedBox(height: 16),
           FutureBuilder<Map<String, dynamic>?>(
             future: _userData,
+            initialData: null,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(
@@ -295,7 +294,7 @@ class _ProfileBottomSheetContentState extends State<ProfileBottomSheetContent> {
               );
             },
           ),
-          const Spacer(),
+          const SizedBox(height: 20),
           TextButton(
             onPressed: _isLoading ? null : _signOut,
             child: const Text(

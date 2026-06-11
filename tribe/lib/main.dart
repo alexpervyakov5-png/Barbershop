@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 // Экраны приложения
 import 'screens/home_screen.dart';
@@ -12,11 +13,15 @@ import 'screens/place_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/master_works_screen.dart';
 import 'screens/admin/admin_dashboard_screen.dart';
+import 'screens/admin/admin_profile_screen.dart';
 import 'screens/master/master_home_screen.dart';
 
 // Экраны авторизации
 import 'auth/login_screen.dart';
 import 'auth/register_screen.dart';
+
+// Utils
+import 'utils/cache_service.dart';
 
 const supabaseUrl = 'https://lizdqsfjnzzizitglgvg.supabase.co';
 const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpemRxc2Zqbnp6aXppdGdsZ3ZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU3NDczNzEsImV4cCI6MjA4MTMyMzM3MX0.HJyeDpdWVrDqV84km62VBIJhbbLwIGmsfk2uP0-dWa8';
@@ -24,7 +29,6 @@ const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYm
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // ✅ Инициализируем русскую локаль для форматирования дат
   await initializeDateFormatting('ru', null);
   
   await Supabase.initialize(
@@ -44,7 +48,6 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Tribe',
-      // ✅ Настройки локализации
       locale: const Locale('ru', 'RU'),
       supportedLocales: const [
         Locale('ru', 'RU'),
@@ -79,14 +82,16 @@ class MyApp extends StatelessWidget {
           type: BottomNavigationBarType.fixed,
         ),
       ),
-      // ✅ При старте проверяем: есть ли сессия?
       home: const StartupScreen(),
       routes: {
         '/login': (context) => const LoginScreen(),
         '/register': (context) => const RegisterScreen(),
         '/profile': (context) => const ProfileScreen(),
+        '/services': (context) => const ServiceScreen(), // ✅ ДОБАВЛЕНО: Маршрут на услуги
         '/admin': (context) => const AdminDashboardScreen(),
+        '/admin-profile': (context) => const AdminProfileScreen(),
         '/master-home': (context) => const MasterHomeScreen(),
+        '/role-check': (context) => const RoleCheckScreen(),
         '/master-works': (context) {
           final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
           return MasterWorksScreen(
@@ -96,11 +101,13 @@ class MyApp extends StatelessWidget {
           );
         },
       },
+      builder: (context, child) {
+        return child!;
+      },
     );
   }
 }
 
-/// ✅ Экран запуска: решает, куда идти
 class StartupScreen extends StatelessWidget {
   const StartupScreen({super.key});
 
@@ -108,17 +115,14 @@ class StartupScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final session = Supabase.instance.client.auth.currentSession;
     
-    // Если есть сессия — проверяем роль
     if (session != null) {
       return const RoleCheckScreen();
     }
     
-    // Нет сессии — показываем вход
     return const LoginScreen();
   }
 }
 
-/// ✅ Экран проверки роли (используется после входа)
 class RoleCheckScreen extends StatefulWidget {
   const RoleCheckScreen({super.key});
 
@@ -137,7 +141,6 @@ class _RoleCheckScreenState extends State<RoleCheckScreen> {
     try {
       final session = Supabase.instance.client.auth.currentSession;
       if (session == null) {
-        // Сессия пропала — возвращаемся на вход
         if (mounted) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -146,21 +149,27 @@ class _RoleCheckScreenState extends State<RoleCheckScreen> {
         return;
       }
 
-      debugPrint('🔍 Checking role for: ${session.user.id}');
+      final cache = CacheService();
+      int? roleId = cache.get<int>('user_role_${session.user.id}');
 
-      final response = await Supabase.instance.client
-          .from('users')
-          .select('role_id')
-          .eq('user_id', session.user.id)
-          .maybeSingle()
-          .timeout(const Duration(seconds: 10), onTimeout: () {
-            debugPrint('⏱️ Timeout');
-            return null;
-          });
+      if (roleId == null) {
+        final response = await Supabase.instance.client
+            .from('users')
+            .select('role_id')
+            .eq('user_id', session.user.id)
+            .maybeSingle()
+            .timeout(const Duration(seconds: 5));
+
+        if (!mounted) return;
+        roleId = response?['role_id'] as int?;
+        
+        if (roleId != null) {
+          await cache.set('user_role_${session.user.id}', roleId, 
+            duration: const Duration(minutes: 30));
+        }
+      }
 
       if (!mounted) return;
-
-      final roleId = response?['role_id'] as int?;
       debugPrint('📊 Role ID: $roleId');
 
       Widget target;
@@ -172,7 +181,6 @@ class _RoleCheckScreenState extends State<RoleCheckScreen> {
         target = const MainScreen();
       }
 
-      // ✅ ЗАМЕНЯЕМ этот экран на целевой (убираем RoleCheckScreen из стека)
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => target),
       );
@@ -180,7 +188,6 @@ class _RoleCheckScreenState extends State<RoleCheckScreen> {
     } catch (e) {
       debugPrint('❌ Error: $e');
       if (mounted) {
-        // При ошибке — на главный экран
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const MainScreen()),
         );
@@ -206,26 +213,30 @@ class _RoleCheckScreenState extends State<RoleCheckScreen> {
   }
 }
 
-/// Главный экран для клиентов
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
+  
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
-  final List<Widget> _pages = [
-    const HomeScreen(),
-    const ServiceScreen(),
-    const MasterScreen(),
-    const PlaceScreen(),
+  
+  final List<Widget> _pages = const [
+    HomeScreen(),
+    ServiceScreen(),
+    MasterScreen(),
+    PlaceScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _pages[_currentIndex],
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _pages,
+      ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (index) => setState(() => _currentIndex = index),

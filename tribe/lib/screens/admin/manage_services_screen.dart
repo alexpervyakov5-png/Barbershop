@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../widgets/tribe_app_bar.dart';
 import '../../utils/error_handler.dart';
+import 'add_edit_service_screen.dart';
 
 class ManageServicesScreen extends StatefulWidget {
   const ManageServicesScreen({super.key});
@@ -22,12 +23,12 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
 
   Future<void> _loadServices() async {
     setState(() => _isLoading = true);
-    
     try {
       final response = await Supabase.instance.client
           .from('services')
-          .select('service_id, name, description, is_active, created_at')
-          .order('name', ascending: true);
+          .select('service_id, name, description, created_at')
+          .order('name', ascending: true)
+          .range(0, 99);
 
       if (mounted) {
         setState(() {
@@ -48,26 +49,62 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
     }
   }
 
-  Future<void> _toggleServiceStatus(int serviceId, bool isActive) async {
+  Future<void> _editService(Map<String, dynamic> service) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => AddEditServiceScreen(existingService: service)),
+    );
+    if (result == true && mounted) _loadServices();
+  }
+
+  Future<void> _deleteService(int serviceId, String serviceName) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF444444),
+        title: const Text('Удалить услугу?', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Вы уверены, что хотите навсегда удалить услугу "$serviceName"?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Удалить', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
     try {
       await Supabase.instance.client
           .from('services')
-          .update({'is_active': isActive})
+          .delete()
           .eq('service_id', serviceId);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(isActive ? '✅ Услуга активирована' : 'Услуга скрыта'),
-            backgroundColor: isActive ? Colors.green : Colors.orange,
+          const SnackBar(
+            content: Text('✅ Услуга удалена'),
+            backgroundColor: Colors.green,
           ),
         );
         _loadServices();
       }
     } catch (e) {
-      ErrorHandler.logError('ManageServicesScreen._toggleServiceStatus', e);
+      ErrorHandler.logError('ManageServicesScreen._deleteService', e);
       if (mounted) {
-        ErrorHandler.showErrorSnackBar(context, e);
+        ErrorHandler.showErrorSnackBar(
+          context,
+          e,
+          customMessage: 'Не удалось удалить. Возможно, услуга привязана к мастерам или записям.',
+        );
       }
     }
   }
@@ -75,7 +112,7 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
   Future<void> _addService() async {
     final result = await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const AddServiceScreen()),
+      MaterialPageRoute(builder: (_) => const AddEditServiceScreen()),
     );
     if (result == true && mounted) _loadServices();
   }
@@ -120,11 +157,9 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
                         itemBuilder: (context, index) {
                           final service = _services[index];
                           return _ServiceCard(
-                            serviceId: service['service_id'],
-                            name: service['name'],
-                            description: service['description'],
-                            isActive: service['is_active'] ?? true,
-                            onToggleStatus: _toggleServiceStatus,
+                            service: service,
+                            onEdit: _editService,
+                            onDelete: _deleteService,
                           );
                         },
                       ),
@@ -136,30 +171,27 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
 }
 
 class _ServiceCard extends StatelessWidget {
-  final int serviceId;
-  final String name;
-  final String? description;
-  final bool isActive;
-  final void Function(int, bool) onToggleStatus;
+  final Map<String, dynamic> service;
+  final void Function(Map<String, dynamic>) onEdit;
+  final void Function(int, String) onDelete;
 
   const _ServiceCard({
-    required this.serviceId,
-    required this.name,
-    this.description,
-    required this.isActive,
-    required this.onToggleStatus,
+    required this.service,
+    required this.onEdit,
+    required this.onDelete,
   });
 
   @override
   Widget build(BuildContext context) {
+    final serviceId = service['service_id'] as int;
+    final name = service['name'];
+    final description = service['description'];
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF444444),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: isActive ? Colors.transparent : Colors.orange.withOpacity(0.3),
-        ),
       ),
       child: Row(
         children: [
@@ -167,37 +199,19 @@ class _ServiceCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    if (!isActive) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'Скрыта',
-                          style: TextStyle(color: Colors.orange, fontSize: 11),
-                        ),
-                      ),
-                    ],
-                  ],
+                Text(
+                  name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-                if (description != null && description!.isNotEmpty)
+                if (description != null && description.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
-                      description!,
+                      description,
                       style: TextStyle(color: Colors.white54, fontSize: 13),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
@@ -206,162 +220,18 @@ class _ServiceCard extends StatelessWidget {
               ],
             ),
           ),
-          Switch(
-            value: isActive,
-            onChanged: (value) => onToggleStatus(serviceId, value),
-            activeColor: const Color(0xFFD47926),
-            activeTrackColor: const Color(0xFFD47926).withValues(alpha: 0.3),
+          // Кнопки действий
+          IconButton(
+            icon: const Icon(Icons.edit, color: Colors.blue, size: 20),
+            onPressed: () => onEdit(service),
+            tooltip: 'Редактировать',
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+            onPressed: () => onDelete(serviceId, name),
+            tooltip: 'Удалить',
           ),
         ],
-      ),
-    );
-  }
-}
-
-class AddServiceScreen extends StatefulWidget {
-  const AddServiceScreen({super.key});
-
-  @override
-  State<AddServiceScreen> createState() => _AddServiceScreenState();
-}
-
-class _AddServiceScreenState extends State<AddServiceScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  bool _isLoading = false;
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _descriptionController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _createService() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _isLoading = true);
-
-    try {
-      await Supabase.instance.client.from('services').insert({
-        'name': _nameController.text.trim(),
-        'description': _descriptionController.text.trim().isNotEmpty
-            ? _descriptionController.text.trim()
-            : null,
-        'is_active': true,
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✅ Услуга добавлена'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        Navigator.pop(context, true);
-      }
-    } catch (e) {
-      ErrorHandler.logError('AddServiceScreen._createService', e);
-      if (mounted) {
-        ErrorHandler.showErrorSnackBar(
-          context,
-          e,
-          customMessage: 'Не удалось создать услугу. Проверьте права доступа.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF363636),
-      appBar: const TribeAppBar(),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Новая услуга',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 32),
-
-              TextFormField(
-                controller: _nameController,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Название услуги',
-                  labelStyle: TextStyle(color: Colors.white54),
-                  prefixIcon: const Icon(Icons.cut, color: Colors.white54),
-                  filled: true,
-                  fillColor: const Color(0xFF444444),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-                validator: (v) => v?.isEmpty ?? true ? 'Введите название' : null,
-              ),
-              const SizedBox(height: 16),
-
-              TextFormField(
-                controller: _descriptionController,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Описание (необязательно)',
-                  labelStyle: TextStyle(color: Colors.white54),
-                  prefixIcon: const Icon(Icons.description, color: Colors.white54),
-                  filled: true,
-                  fillColor: const Color(0xFF444444),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-                maxLines: 3,
-              ),
-              const SizedBox(height: 40),
-
-              SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _createService,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFD47926),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Text(
-                          'Создать услугу',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-                        ),
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

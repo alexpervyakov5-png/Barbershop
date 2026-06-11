@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'master_services_screen.dart';  // ✅ Правильно (в той же папке)    // ✅ Правильно (в той же папке)
+import 'master_availability_screen.dart'; // ✅ Правильно (в той же папке)
 import '../../widgets/tribe_app_bar.dart';
-import 'master_services_screen.dart';
-import 'master_works_screen.dart';
-import 'master_availability_screen.dart';
-// ✅ УДАЛЕНО: import 'master_profile_screen.dart';
-
+import '../master_works_screen.dart';
 class MasterHomeScreen extends StatefulWidget {
   const MasterHomeScreen({super.key});
 
@@ -15,11 +13,8 @@ class MasterHomeScreen extends StatefulWidget {
 
 class _MasterHomeScreenState extends State<MasterHomeScreen> {
   int _currentIndex = 0;
-  String? _masterName;
   String? _masterId;
-
-  // ✅ Теперь только 3 страницы
-  final List<Widget> _pages = [];
+  String? _masterName;
 
   @override
   void initState() {
@@ -28,38 +23,26 @@ class _MasterHomeScreenState extends State<MasterHomeScreen> {
   }
 
   Future<void> _loadMasterData() async {
-    try {
-      final userId = Supabase.instance.client.auth.currentUser?.id;
-      if (userId == null) return;
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) return;
 
-      final response = await Supabase.instance.client
-          .from('users')
-          .select('user_id, full_name, master_rank')
-          .eq('user_id', userId)
-          .maybeSingle();
+    final response = await Supabase.instance.client
+        .from('users')
+        .select('user_id, full_name')
+        .eq('user_id', userId)
+        .maybeSingle();
 
-      if (mounted && response != null) {
-        setState(() {
-          _masterId = response['user_id'];
-          _masterName = response['full_name'] ?? 'Мастер';
-          
-          // ✅ Только 3 вкладки: Сервисы, Работы, Доступность
-          _pages.addAll([
-            MasterServicesScreen(masterId: _masterId!),
-            MasterWorksScreen(masterId: _masterId!, masterName: _masterName!),
-            const MasterAvailabilityScreen(),
-            // ✅ УДАЛЕНО: MasterProfileScreen
-          ]);
-        });
-      }
-    } catch (e) {
-      debugPrint('❌ Ошибка загрузки данных мастера: $e');
+    if (mounted && response != null) {
+      setState(() {
+        _masterId = response['user_id'];
+        _masterName = response['full_name'] ?? 'Мастер';
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_masterId == null || _pages.isEmpty) {
+    if (_masterId == null) {
       return const Scaffold(
         backgroundColor: Color(0xFF363636),
         body: Center(child: CircularProgressIndicator(color: Colors.white)),
@@ -68,8 +51,20 @@ class _MasterHomeScreenState extends State<MasterHomeScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF363636),
-      appBar: const TribeAppBar(), // ✅ Профиль доступен через иконку здесь
-      body: _pages[_currentIndex],
+      appBar: const TribeAppBar(showProfileIcon: true),
+      body: IndexedStack(
+        index: _currentIndex,
+        children: [
+          MasterServicesScreen(masterId: _masterId!),
+          MasterWorksScreen(
+            masterId: _masterId!,
+            masterName: _masterName!,
+            canEdit: true,
+            showAppBar: false,
+          ),
+          const MasterAvailabilityScreen(),
+        ],
+      ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (index) => setState(() => _currentIndex = index),
@@ -95,7 +90,6 @@ class _MasterHomeScreenState extends State<MasterHomeScreen> {
             activeIcon: Icon(Icons.schedule),
             label: 'Доступность',
           ),
-          // ✅ УДАЛЕНО: 4-я вкладка "Профиль"
         ],
       ),
     );

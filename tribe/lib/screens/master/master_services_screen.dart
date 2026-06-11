@@ -22,7 +22,6 @@ class _MasterServicesScreenState extends State<MasterServicesScreen> {
   bool _isSaving = false;
 
   // Контроллеры для редактирования (временные, для текущего редактируемого сервиса)
-  int? _editingServiceId;
   final _priceController = TextEditingController();
   final _durationController = TextEditingController();
 
@@ -98,7 +97,6 @@ class _MasterServicesScreenState extends State<MasterServicesScreen> {
   void _openEditDialog(int serviceId, String serviceName) {
     final currentData = _masterServiceData[serviceId];
     
-    _editingServiceId = serviceId;
     _priceController.text = currentData?['price']?.toString() ?? '1000';
     _durationController.text = currentData?['duration_min']?.toString() ?? '30';
 
@@ -156,7 +154,6 @@ class _MasterServicesScreenState extends State<MasterServicesScreen> {
         ],
       ),
     ).then((_) {
-      _editingServiceId = null;
       _priceController.clear();
       _durationController.clear();
     });

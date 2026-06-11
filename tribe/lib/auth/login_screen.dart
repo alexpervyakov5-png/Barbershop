@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:tribe/main.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -23,6 +22,12 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  // ✅ ИСПРАВЛЕНО: Валидация email
+  bool _isValidEmail(String email) {
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    return emailRegex.hasMatch(email);
+  }
+
   Future<void> _signIn() async {
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
@@ -35,42 +40,23 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
+    if (!_isValidEmail(email)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Введите корректный email')),
+      );
+      return;
+    }
+
     try {
       setState(() => _isLoading = true);
 
-      // 1. Выполняем вход
       await Supabase.instance.client.auth.signInWithPassword(
         email: email,
         password: password,
       );
 
-      // 2. Создаём профиль, если нет
-      final userId = Supabase.instance.client.auth.currentUser?.id;
-      if (userId != null) {
-        final existing = await Supabase.instance.client
-            .from('users')
-            .select('user_id')
-            .eq('user_id', userId)
-            .maybeSingle();
-
-        if (existing == null) {
-          final fullName = email.split('@')[0];
-          await Supabase.instance.client.from('users').insert({
-            'user_id': userId,
-            'full_name': fullName,
-            'role_id': 1,
-            'email': email,
-            'phone': '',
-            'photo_url': '',
-            'created_at': DateTime.now().toIso8601String(),
-          });
-        }
-      }
-
-      // 3. ✅ ЖДЁМ 1.5 секунды, чтобы сессия точно сохранилась
-      await Future.delayed(const Duration(milliseconds: 1500));
-
-      // 4. ✅ ПРОВЕРЯЕМ, что сессия действительно есть
+      // ✅ ИСПРАВЛЕНО: Убран Future.delayed. Сессия доступна мгновенно.
       final session = Supabase.instance.client.auth.currentSession;
       if (session == null) {
         throw Exception('Сессия не создана');
@@ -78,11 +64,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
       debugPrint('✅ Session confirmed: ${session.user.id}');
 
-      // 5. ✅ ЯВНО переходим на экран загрузки (который проверит роль)
       if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const RoleCheckScreen()),
-        );
+        // Переход на экран проверки роли, который перенаправит куда нужно
+        Navigator.of(context).pushReplacementNamed('/role-check');
       }
 
     } on SocketException {
@@ -96,12 +80,12 @@ class _LoginScreenState extends State<LoginScreen> {
     } on AuthException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: ${e.message}')),
+        SnackBar(content: Text('Ошибка: ${e.message}'), backgroundColor: Colors.red),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ошибка: $e')),
+        SnackBar(content: Text('Ошибка: $e'), backgroundColor: Colors.red),
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);

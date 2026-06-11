@@ -27,6 +27,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
+  // ✅ ИСПРАВЛЕНО: Валидация email
+  bool _isValidEmail(String email) {
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    return emailRegex.hasMatch(email);
+  }
+
   Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
     
@@ -71,8 +77,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
             duration: Duration(seconds: 2),
           ),
         );
-        // ✅ ИСПРАВЛЕНО: НЕ делаем Navigator.pop()!
-        // StreamBuilder сам переключит экран после события signedIn
+        
+        // ✅ ИСПРАВЛЕНО: Явная навигация после регистрации
+        await Future.delayed(const Duration(seconds: 2));
+        if (mounted) {
+          Navigator.of(context).pushNamedAndRemoveUntil(
+            '/role-check',
+            (route) => false,
+          );
+        }
       }
     } on AuthException catch (e) {
       String message = 'Ошибка: ${e.message}';
@@ -156,7 +169,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
                 validator: (v) {
                   if (v?.isEmpty ?? true) return 'Введите email';
-                  if (!v!.contains('@')) return 'Некорректный email';
+                  if (!_isValidEmail(v!)) return 'Некорректный email';
                   return null;
                 },
               ),
@@ -242,7 +255,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
               const SizedBox(height: 24),
               Center(
                 child: TextButton(
-                  // ✅ Для кнопки "Войти" можно оставить pop(), т.к. это явный переход
                   onPressed: () => Navigator.pop(context),
                   child: const Text(
                     'Уже есть аккаунт? Войти',

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../widgets/tribe_app_bar.dart';
-import 'add_master_screen.dart';
+import 'add_edit_master_screen.dart';
 
 class ManageMastersScreen extends StatefulWidget {
   const ManageMastersScreen({super.key});
@@ -15,6 +15,7 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
   bool _isLoading = true;
   final _searchController = TextEditingController();
   String _searchQuery = '';
+  List<Map<String, dynamic>> _filteredMasters = [];
 
   @override
   void initState() {
@@ -30,7 +31,19 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
   }
 
   void _onSearchChanged() {
-    setState(() => _searchQuery = _searchController.text.toLowerCase());
+    setState(() {
+      _searchQuery = _searchController.text.toLowerCase();
+      _updateFilteredMasters();
+    });
+  }
+
+  void _updateFilteredMasters() {
+    _filteredMasters = _masters.where((m) {
+      if (_searchQuery.isEmpty) return true;
+      final name = (m['full_name'] ?? '').toLowerCase();
+      final email = (m['email'] ?? '').toLowerCase();
+      return name.contains(_searchQuery) || email.contains(_searchQuery);
+    }).toList();
   }
 
   Future<void> _loadMasters() async {
@@ -38,13 +51,15 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
     try {
       final response = await Supabase.instance.client
           .from('users')
-          .select('user_id, full_name, email, phone, photo_url, is_active, created_at, raiting_avg')
-          .eq('role_id', 2) // Показываем только мастеров
-          .order('created_at', ascending: false);
+          .select('user_id, full_name, email, phone, photo_url, created_at, master_rank')
+          .eq('role_id', 2)
+          .order('created_at', ascending: false)
+          .range(0, 99);
 
       if (mounted) {
         setState(() {
           _masters = List<Map<String, dynamic>>.from(response);
+          _updateFilteredMasters();
           _isLoading = false;
         });
       }
@@ -54,18 +69,47 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
     }
   }
 
-  Future<void> _toggleMasterStatus(String masterId, bool isActive) async {
+  Future<void> _editMaster(Map<String, dynamic> master) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => AddEditMasterScreen(existingMaster: master)),
+    );
+    if (result == true && mounted) _loadMasters();
+  }
+
+  Future<void> _deleteMaster(String masterId, String masterName) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF444444),
+        title: const Text('Удалить мастера?', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Вы уверены, что хотите навсегда удалить мастера "$masterName"? Это действие нельзя отменить.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Удалить', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
     try {
-      await Supabase.instance.client
-          .from('users')
-          .update({'is_active': isActive})
-          .eq('user_id', masterId);
+      await Supabase.instance.client.from('users').delete().eq('user_id', masterId);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(isActive ? 'Мастер активирован' : 'Мастер деактивирован'),
-            backgroundColor: isActive ? Colors.green : Colors.orange,
+          const SnackBar(
+            content: Text('✅ Мастер удален'),
+            backgroundColor: Colors.green,
           ),
         );
         _loadMasters();
@@ -73,7 +117,10 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Ошибка удаления (возможно, есть связанные записи): $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -82,20 +129,13 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
   Future<void> _addMaster() async {
     final result = await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const AddMasterScreen()),
+      MaterialPageRoute(builder: (_) => const AddEditMasterScreen()),
     );
     if (result == true && mounted) _loadMasters();
   }
 
   @override
   Widget build(BuildContext context) {
-    final filteredMasters = _masters.where((m) {
-      if (_searchQuery.isEmpty) return true;
-      final name = (m['full_name'] ?? '').toLowerCase();
-      final email = (m['email'] ?? '').toLowerCase();
-      return name.contains(_searchQuery) || email.contains(_searchQuery);
-    }).toList();
-
     return Scaffold(
       backgroundColor: const Color(0xFF363636),
       appBar: const TribeAppBar(),
@@ -128,7 +168,7 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
               child: ElevatedButton.icon(
                 onPressed: _addMaster,
                 icon: const Icon(Icons.add),
-                label: const Text('Пригласить мастера'),
+                label: const Text('Добавить мастера'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFD47926),
                   foregroundColor: Colors.white,
@@ -144,7 +184,7 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator(color: Colors.white))
-                : filteredMasters.isEmpty
+                : _filteredMasters.isEmpty
                     ? Center(
                         child: Text(
                           _searchQuery.isEmpty ? 'Нет мастеров' : 'Мастера не найдены',
@@ -153,18 +193,14 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.symmetric(horizontal: 24),
-                        itemCount: filteredMasters.length,
+                        itemCount: _filteredMasters.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
-                          final master = filteredMasters[index];
+                          final master = _filteredMasters[index];
                           return _MasterCard(
-                            masterId: master['user_id'],
-                            name: master['full_name'] ?? 'Без имени',
-                            email: master['email'],
-                            phone: master['phone'],
-                            photoUrl: master['photo_url'],
-                            isActive: master['is_active'] ?? false,
-                            onToggleStatus: _toggleMasterStatus,
+                            master: master,
+                            onEdit: _editMaster,
+                            onDelete: _deleteMaster,
                           );
                         },
                       ),
@@ -176,112 +212,91 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
 }
 
 class _MasterCard extends StatelessWidget {
-  final String masterId;
-  final String name;
-  final String? email;
-  final String? phone;
-  final String? photoUrl;
-  final bool isActive;
-  final void Function(String, bool) onToggleStatus;
+  final Map<String, dynamic> master;
+  final void Function(Map<String, dynamic>) onEdit;
+  final void Function(String, String) onDelete;
 
   const _MasterCard({
-    required this.masterId,
-    required this.name,
-    this.email,
-    this.phone,
-    this.photoUrl,
-    required this.isActive,
-    required this.onToggleStatus,
+    required this.master,
+    required this.onEdit,
+    required this.onDelete,
   });
 
   @override
   Widget build(BuildContext context) {
+    final name = master['full_name'] ?? 'Без имени';
+    final masterId = master['user_id'];
+    final photoUrl = master['photo_url'] as String?;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF444444),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          // ✅ Если не активен — красная рамка
-          color: isActive ? Colors.transparent : Colors.red.withOpacity(0.3),
-        ),
       ),
       child: Row(
         children: [
-          photoUrl != null && photoUrl!.isNotEmpty
+          // Аватар
+          photoUrl != null && photoUrl.isNotEmpty
               ? ClipOval(
                   child: Image.network(
-                    photoUrl!,
+                    photoUrl,
                     width: 48,
                     height: 48,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _buildInitialsAvatar(),
+                    errorBuilder: (_, __, ___) => _buildInitialsAvatar(name),
                   ),
                 )
-              : _buildInitialsAvatar(),
+              : _buildInitialsAvatar(name),
           const SizedBox(width: 12),
+
+          // Информация
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // ✅ Бейдж статуса
-                    if (!isActive)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'Ожидает подтверждения',
-                          style: TextStyle(color: Colors.red, fontSize: 11),
-                        ),
-                      )
-                    else
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.green.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'Активен',
-                          style: TextStyle(color: Colors.green, fontSize: 11),
-                        ),
-                      ),
-                  ],
+                Text(
+                  name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-                if (email != null)
-                  Text(email!, style: TextStyle(color: Colors.white54, fontSize: 13)),
-                if (phone != null)
-                  Text(phone!, style: TextStyle(color: Colors.white54, fontSize: 13)),
+                if (master['master_rank'] != null)
+                  Text(
+                    master['master_rank'],
+                    style: const TextStyle(
+                      color: Color(0xFFD47926),
+                      fontSize: 13,
+                    ),
+                  ),
+                const SizedBox(height: 4),
+                Text(
+                  master['email'] ?? '',
+                  style: TextStyle(color: Colors.white54, fontSize: 13),
+                ),
               ],
             ),
           ),
-          // ✅ Переключатель активности (подтверждение админом)
-          Switch(
-            value: isActive,
-            onChanged: (value) => onToggleStatus(masterId, value),
-            activeColor: const Color(0xFFD47926),
-            activeTrackColor: const Color(0xFFD47926).withValues(alpha: 0.3),
+
+          // Кнопки действий
+          IconButton(
+            icon: const Icon(Icons.edit, color: Colors.blue, size: 20),
+            onPressed: () => onEdit(master),
+            tooltip: 'Редактировать',
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+            onPressed: () => onDelete(masterId, name),
+            tooltip: 'Удалить',
           ),
         ],
       ),
     );
   }
 
-  Widget _buildInitialsAvatar() {
+  Widget _buildInitialsAvatar(String name) {
     final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
     return Container(
       width: 48,
@@ -293,7 +308,10 @@ class _MasterCard extends StatelessWidget {
       child: Center(
         child: Text(
           initial,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ),
     );

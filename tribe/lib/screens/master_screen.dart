@@ -1,52 +1,89 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../widgets/tribe_app_bar.dart';
 import '../utils/error_handler.dart';
+import '../utils/cache_service.dart';
 import 'service_screen.dart';
 import 'master_works_screen.dart';
 
-class MasterScreen extends StatelessWidget {
+class MasterScreen extends StatefulWidget {
   const MasterScreen({super.key});
 
+  @override
+  State<MasterScreen> createState() => _MasterScreenState();
+}
+
+class _MasterScreenState extends State<MasterScreen> {
+  final CacheService _cache = CacheService();
+  List<Map<String, dynamic>>? _cachedMasters;
+  DateTime? _cacheTimestamp;
+
   Future<List<Map<String, dynamic>>> _fetchBarbers() async {
+    // 🔥 Проверяем кеш (5 минут)
+    if (_cachedMasters != null && 
+        _cacheTimestamp != null &&
+        DateTime.now().difference(_cacheTimestamp!) < const Duration(minutes: 5)) {
+      debugPrint('✅ Masters loaded from memory cache');
+      return _cachedMasters!;
+    }
+
+    // 🔥 Пробуем загрузить из localStorage
+    final cachedData = await _cache.getFromStorage<List>('masters_list');
+    if (cachedData != null) {
+      debugPrint('✅ Masters loaded from storage cache');
+      final masters = List<Map<String, dynamic>>.from(cachedData);
+      _cachedMasters = masters;
+      _cacheTimestamp = DateTime.now();
+      return masters;
+    }
+
+    // 🔥 Загружаем с сервера
     try {
-      // ✅ ИСПРАВЛЕНО: убираем raiting_avg из select и order
       final response = await Supabase.instance.client
           .from('users')
           .select('user_id, full_name, photo_url, master_rank')
           .eq('role_id', 2)
           .eq('is_active', true)
-          .order('created_at', ascending: false); // Сортировка по дате добавления
+          .order('created_at', ascending: false)
+          .range(0, 49)
+          .timeout(const Duration(seconds: 10));
 
       final List<Map<String, dynamic>> masters = List<Map<String, dynamic>>.from(response);
       
-      // ✅ Если нужен рейтинг — загружаем его отдельно из reviews (опционально)
-      // for (var m in masters) {
-      //   final reviews = await Supabase.instance.client
-      //       .from('reviews')
-      //       .select('rating')
-      //       .eq('master_id', m['user_id']);
-      //   final avg = reviews.isNotEmpty 
-      //       ? reviews.map((r) => r['rating'] as int).reduce((a, b) => a + b) / reviews.length 
-      //       : 0.0;
-      //   m['review_count'] = reviews.length;
-      //   m['raiting_avg'] = avg;
-      // }
-      
-      // ✅ Пока добавляем заглушки для совместимости с UI
+      // 🔥 Загружаем реальный рейтинг
       for (var m in masters) {
-        m['review_count'] = 0;
-        m['raiting_avg'] = 0.0;
+        final reviews = await Supabase.instance.client
+            .from('reviews')
+            .select('rating')
+            .eq('master_id', m['user_id']);
+            
+        final avg = reviews.isNotEmpty 
+            ? reviews.map((r) => (r['rating'] as num).toDouble()).reduce((a, b) => a + b) / reviews.length 
+            : 0.0;
+            
+        m['review_count'] = reviews.length;
+        m['raiting_avg'] = avg;
       }
       
+      // 🔥 Сохраняем в кеш
+      _cachedMasters = masters;
+      _cacheTimestamp = DateTime.now();
+      await _cache.set('masters_list', masters, duration: const Duration(minutes: 10));
+      
       return masters;
-    } on PostgrestException catch (e) {
-      ErrorHandler.logError('MasterScreen._fetchBarbers', e);
-      rethrow;
     } catch (e) {
       ErrorHandler.logError('MasterScreen._fetchBarbers', e);
       rethrow;
     }
+  }
+
+  void _clearCache() {
+    setState(() {
+      _cachedMasters = null;
+      _cacheTimestamp = null;
+    });
+    _cache.clear('masters_list');
   }
 
   @override
@@ -57,29 +94,18 @@ class MasterScreen extends StatelessWidget {
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: _fetchBarbers(),
         builder: (context, snapshot) {
-          // ✅ Обработка ошибок
           if (snapshot.hasError) {
-            ErrorHandler.logError('MasterScreen.build', snapshot.error!);
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
-                      Icons.wifi_off_rounded,
-                      size: 64,
-                      color: Colors.white54,
-                    ),
+                    Icon(Icons.wifi_off_rounded, size: 64, color: Colors.white54),
                     const SizedBox(height: 16),
                     const Text(
                       'Не удалось загрузить мастеров',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w500),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -90,11 +116,8 @@ class MasterScreen extends StatelessWidget {
                     const SizedBox(height: 24),
                     ElevatedButton.icon(
                       onPressed: () {
-                        Navigator.of(context).pop();
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const MasterScreen()),
-                        );
+                        _clearCache();
+                        setState(() {});
                       },
                       icon: const Icon(Icons.refresh),
                       label: const Text('Попробовать снова'),
@@ -109,38 +132,39 @@ class MasterScreen extends StatelessWidget {
             );
           }
 
-          // Загрузка
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (snapshot.connectionState == ConnectionState.waiting && _cachedMasters == null) {
             return const Center(child: CircularProgressIndicator(color: Colors.white));
           }
 
-          // Нет данных
-          final barbers = snapshot.data ?? [];
+          final barbers = snapshot.data ?? _cachedMasters ?? [];
           if (barbers.isEmpty) {
             return const Center(
-              child: Text(
-                'Нет мастеров',
-                style: TextStyle(color: Colors.white70),
-              ),
+              child: Text('Нет мастеров', style: TextStyle(color: Colors.white70)),
             );
           }
 
-          // Успех
-          return ListView.separated(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-            itemCount: barbers.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, index) {
-              final b = barbers[index];
-              return _MasterCard(
-                masterId: b['user_id'],
-                name: b['full_name'] ?? 'Мастер',
-                photoUrl: b['photo_url'],
-                rating: (b['raiting_avg'] ?? 0.0).toDouble(),
-                reviewCount: b['review_count'] ?? 0,
-                position: b['master_rank'] ?? (index == 0 ? 'Основатель' : 'Барбер'),
-              );
+          return RefreshIndicator(
+            onRefresh: () async {
+              _clearCache();
+              await _fetchBarbers();
+              if (mounted) setState(() {});
             },
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              itemCount: barbers.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (context, index) {
+                final b = barbers[index];
+                return _MasterCard(
+                  masterId: b['user_id'],
+                  name: b['full_name'] ?? 'Мастер',
+                  photoUrl: b['photo_url'],
+                  rating: (b['raiting_avg'] ?? 0.0).toDouble(),
+                  reviewCount: b['review_count'] ?? 0,
+                  position: b['master_rank'] ?? 'Барбер',
+                );
+              },
+            ),
           );
         },
       ),
@@ -191,7 +215,30 @@ class _MasterCard extends StatelessWidget {
             padding: const EdgeInsets.all(20),
             child: Row(
               children: [
-                _buildAvatar(),
+                // 🔥 CachedNetworkImage для аватара
+                photoUrl != null && photoUrl!.isNotEmpty
+                    ? ClipOval(
+                        child: CachedNetworkImage(
+                          imageUrl: photoUrl!,
+                          width: 56,
+                          height: 56,
+                          fit: BoxFit.cover,
+                          placeholder: (context, url) => Container(
+                            width: 56,
+                            height: 56,
+                            color: const Color(0xFF555555),
+                            child: const Center(
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white54,
+                                strokeCap: StrokeCap.round,
+                              ),
+                            ),
+                          ),
+                          errorWidget: (context, url, error) => _buildInitialsAvatar(),
+                        ),
+                      )
+                    : _buildInitialsAvatar(),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
@@ -206,7 +253,6 @@ class _MasterCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      // ✅ Показываем ранг мастера
                       Text(
                         position,
                         style: const TextStyle(color: Color(0xFFD47926), fontSize: 13, fontWeight: FontWeight.w500),
@@ -220,6 +266,7 @@ class _MasterCard extends StatelessWidget {
                               builder: (_) => MasterWorksScreen(
                                 masterId: masterId,
                                 masterName: name,
+                                canEdit: false,
                               ),
                             ),
                           );
@@ -251,41 +298,8 @@ class _MasterCard extends StatelessWidget {
     );
   }
 
-  Widget _buildAvatar() {
-    if (photoUrl != null && photoUrl!.isNotEmpty) {
-      return ClipOval(
-        child: Image.network(
-          photoUrl!,
-          width: 56,
-          height: 56,
-          fit: BoxFit.cover,
-          loadingBuilder: (context, child, loadingProgress) {
-            if (loadingProgress == null) return child;
-            return Container(
-              width: 56,
-              height: 56,
-              color: const Color(0xFF555555),
-              child: const Center(
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white54,
-                ),
-              ),
-            );
-          },
-          errorBuilder: (context, error, stackTrace) {
-            ErrorHandler.logError('_MasterCard._buildAvatar', error, stackTrace);
-            return _buildInitialsAvatar();
-          },
-        ),
-      );
-    }
-    return _buildInitialsAvatar();
-  }
-
   Widget _buildInitialsAvatar() {
     final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
-    
     return Container(
       width: 56,
       height: 56,

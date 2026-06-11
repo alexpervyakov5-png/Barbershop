@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:table_calendar/table_calendar.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 
@@ -32,23 +32,21 @@ class AppointmentTimeScreen extends StatefulWidget {
 }
 
 class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
-  DateTime _selectedDay = DateTime.now();
+  DateTime _selectedDay = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
   DateTime _focusedDay = DateTime.now();
   DateTime? _nearestAvailableDay;
   Map<DateTime, List<String>> _availableSlots = {};
   bool _isLoading = true;
   String? _selectedTime;
 
-  // ✅ Вычисляем длительность один раз
   int get _serviceDuration => widget.totalDuration ?? widget.duration ?? 60;
 
   final Map<String, List<String>> _timeGroups = {
-    'Утро': ['10:00', '11:00'],
-    'День': ['12:00', '13:00', '14:00', '15:00', '16:00', '17:00'],
-    'Вечер': ['18:00', '19:00', '19:45', '20:00'],
+    'Утро': [],
+    'День': [],
+    'Вечер': [],
   };
 
-  // ✅ Динамические названия месяцев
   static const _months = [
     'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
     'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
@@ -72,6 +70,7 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
         setState(() {
           _availableSlots = slots;
           _nearestAvailableDay = _findNearestAvailableDay(slots);
+          _updateTimeGroups(slots[_selectedDay] ?? []);
           _isLoading = false;
         });
       }
@@ -84,7 +83,23 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
     }
   }
 
-  // ✅ Исправленная логика: работа с таблицей availability по датам
+  void _updateTimeGroups(List<String> slots) {
+    _timeGroups['Утро'] = [];
+    _timeGroups['День'] = [];
+    _timeGroups['Вечер'] = [];
+
+    for (var slot in slots) {
+      final hour = int.parse(slot.split(':')[0]);
+      if (hour < 12) {
+        _timeGroups['Утро']!.add(slot);
+      } else if (hour < 18) {
+        _timeGroups['День']!.add(slot);
+      } else {
+        _timeGroups['Вечер']!.add(slot);
+      }
+    }
+  }
+
   Future<Map<DateTime, List<String>>> _fetchAvailableSlots(
     String barberId,
     DateTime day,
@@ -93,7 +108,6 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
     try {
       final dateString = DateFormat('yyyy-MM-dd').format(day);
       
-      // ✅ 1. Загружаем доступность мастера на КОНКРЕТНУЮ ДАТУ
       final availabilityResponse = await Supabase.instance.client
           .from('availability')
           .select('start_time, end_time')
@@ -103,7 +117,6 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
 
       if (availabilityResponse.isEmpty) return {};
 
-      // ✅ 2. Загружаем уже забронированные слоты на эту дату
       final appointmentsResponse = await Supabase.instance.client
           .from('appointments')
           .select('start_datetime, end_datetime')
@@ -112,7 +125,6 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
           .gte('start_datetime', '$dateString 00:00:00')
           .lte('start_datetime', '$dateString 23:59:59');
 
-      // Формируем список существующих записей для проверки пересечений
       final List<Map<String, DateTime>> existing = [];
       for (var appt in appointmentsResponse) {
         existing.add({
@@ -141,17 +153,13 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
         while (currH < endH || (currH == endH && currM < endM)) {
           final timeStr = '${currH.toString().padLeft(2, '0')}:${currM.toString().padLeft(2, '0')}';
           
-          // Рассчитываем интервал новой записи
           final candidateStart = DateTime(day.year, day.month, day.day, currH, currM);
           final candidateEnd = candidateStart.add(Duration(minutes: durationMinutes));
 
-          // 1. Если запись не помещается в рабочий слот мастера -> останавливаем генерацию
           if (candidateEnd.isAfter(workSlotEndDt)) break;
 
-          // 2. Проверяем пересечение с существующими записями
           bool isAvailable = true;
           for (var appt in existing) {
-            // Условие пересечения: !(конец_новой <= начало_существ || начало_новой >= конец_существ)
             if (candidateEnd.isAfter(appt['start']!) && candidateStart.isBefore(appt['end']!)) {
               isAvailable = false;
               break;
@@ -199,7 +207,7 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
   void _onDaySelected(DateTime selectedDay, DateTime focusedDay) {
     if (!mounted) return;
     setState(() {
-      _selectedDay = selectedDay;
+      _selectedDay = DateTime(selectedDay.year, selectedDay.month, selectedDay.day);
       _focusedDay = focusedDay;
       _selectedTime = null;
     });
@@ -244,15 +252,19 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
         throw Exception('Пользователь не авторизован');
       }
 
-      // ✅ ИСПРАВЛЕНО: используем client_id вместо polzovatel_id
-      await Supabase.instance.client.from('appointments').insert({
-        'client_id': userId,
-        'barber_id': widget.masterId,
-        'service_id': widget.serviceId,
-        'start_datetime': selectedDateTime.toIso8601String(),
-        'end_datetime': endDateTime.toIso8601String(),
-        'status': 'забронировано',
-      });
+      // ✅ ИСПРАВЛЕНО: Создаём отдельную запись для каждой услуги
+      final serviceIds = widget.serviceIds ?? [widget.serviceId!];
+      
+      for (var serviceId in serviceIds) {
+        await Supabase.instance.client.from('appointments').insert({
+          'client_id': userId,
+          'barber_id': widget.masterId,
+          'service_id': serviceId,
+          'start_datetime': selectedDateTime.toIso8601String(),
+          'end_datetime': endDateTime.toIso8601String(),
+          'status': 'забронировано',
+        });
+      }
 
       if (mounted) {
         showDialog(
@@ -277,9 +289,8 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
             actions: [
               TextButton(
                 onPressed: () {
-                  Navigator.pop(context); // Закрыть диалог
-                  Navigator.pop(context); // Закрыть экран выбора времени
-                  // Возвращаемся к списку услуг или главному экрану
+                  Navigator.pop(context);
+                  Navigator.pop(context);
                 },
                 child: const Text('OK', style: TextStyle(color: Colors.white)),
               ),
@@ -338,7 +349,6 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
                 todayTextStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                 weekendTextStyle: TextStyle(color: Colors.white54),
                 holidayTextStyle: TextStyle(color: Colors.white54),
-                
                 defaultDecoration: BoxDecoration(
                   color: Colors.transparent,
                   borderRadius: BorderRadius.all(Radius.circular(8)),
@@ -481,7 +491,7 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: _timeGroups.entries.map((entry) {
-          final groupTime = entry.value.where(slots.contains).toList();
+          final groupTime = entry.value;
           if (groupTime.isEmpty) return const SizedBox.shrink();
 
           return Padding(
@@ -535,7 +545,6 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
     );
   }
 
-  // ✅ ИСПРАВЛЕНО: динамический месяц вместо хардкода "мая"
   String _formatDate(DateTime date) {
     const weekdays = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
     final weekday = weekdays[date.weekday - 1];

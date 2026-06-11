@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../widgets/tribe_app_bar.dart';
 import '../utils/error_handler.dart';
+import '../utils/cache_service.dart';
 import 'master_list_screen.dart';
 import 'appointment_time_screen.dart';
 
@@ -41,79 +44,94 @@ class _ServiceScreenState extends State<ServiceScreen> {
   }
 
   Future<void> _loadServices() async {
+    setState(() => _isLoading = true);
+
     try {
       List<Map<String, dynamic>> services = [];
-      
+      Map<int, Map<String, dynamic>> details = {};
+
       if (widget.barberId != null) {
-        // ✅ ИСПРАВЛЕНО: master_services вместо barber_services
+        // 🔥 Загружаем услуги КОНКРЕТНОГО мастера
+        debugPrint('🔍 Loading services for master: ${widget.barberId}');
+        
         final bsResponse = await Supabase.instance.client
             .from('master_services')
             .select('service_id, price, duration_min')
             .eq('barber_id', widget.barberId!)
             .timeout(const Duration(seconds: 10));
 
-        final List<dynamic> bsList = bsResponse as List<dynamic>;
-        
-        final Map<int, Map<String, dynamic>> details = {};
-        for (var item in bsList) {
+        debugPrint('📊 Master services count: ${bsResponse.length}');
+
+        for (var item in bsResponse) {
           final serviceId = item['service_id'] as int;
           details[serviceId] = {
             'price': item['price'],
             'duration_min': (item['duration_min'] as num?)?.toInt() ?? 60,
           };
         }
-        _serviceDetails.addAll(details);
 
-        final List<int> ids = bsList.map((e) => e['service_id'] as int).toList();
+        final List<int> ids = bsResponse.map((e) => e['service_id'] as int).toList();
+        debugPrint(' Service IDs: $ids');
 
         if (ids.isEmpty) {
-          if (mounted) setState(() { _allServices = []; _isLoading = false; });
+          if (mounted) {
+            setState(() {
+              _allServices = [];
+              _serviceDetails.clear();
+              _filterServices();
+              _isLoading = false;
+            });
+          }
           return;
         }
 
-        final List<Object> idsObj = ids.cast<Object>();
-        
+        // Загружаем детали услуг
         final sResponse = await Supabase.instance.client
             .from('services')
             .select('service_id, name, description')
-            .inFilter('service_id', idsObj)
+            .inFilter('service_id', ids)
             .eq('is_active', true)
             .order('name', ascending: true)
             .timeout(const Duration(seconds: 10));
-        
+
         services = List<Map<String, dynamic>>.from(sResponse as List);
+        debugPrint('✅ Loaded ${services.length} active services');
       } else {
+        // Загружаем ВСЕ активные услуги
         final sResponse = await Supabase.instance.client
             .from('services')
             .select('service_id, name, description')
             .eq('is_active', true)
             .order('name', ascending: true)
+            .range(0, 99)
             .timeout(const Duration(seconds: 10));
         services = List<Map<String, dynamic>>.from(sResponse as List);
       }
 
       if (!mounted) return;
+
       setState(() {
         _allServices = services;
-        _filteredServices = services;
+        _serviceDetails.clear();
+        _serviceDetails.addAll(details);
+        _filterServices();
         _isLoading = false;
       });
     } catch (e) {
       ErrorHandler.logError('ServiceScreen._loadServices', e);
-      
+
       if (!mounted) return;
       setState(() => _isLoading = false);
-      
+
       String errorMessage = 'Не удалось загрузить услуги';
-      
-      if (e.toString().contains('Connection reset')) {
+
+      if (e is TimeoutException || e.toString().contains('timeout')) {
+        errorMessage = 'Превышено время ожидания. Проверьте интернет и попробуйте снова.';
+      } else if (e.toString().contains('Connection reset') ||
+          e.toString().contains('SocketException')) {
         errorMessage = 'Проблема с подключением. Проверьте интернет.';
-      } else if (e.toString().contains('timeout')) {
-        errorMessage = 'Превышено время ожидания. Попробуйте снова.';
-      } else if (e.toString().contains('master_services')) {
-        errorMessage = 'Ошибка доступа к услугам. Попробуйте позже.';
       }
-      
+
       if (mounted) {
         ErrorHandler.showErrorSnackBar(context, e, customMessage: errorMessage);
       }
@@ -123,10 +141,10 @@ class _ServiceScreenState extends State<ServiceScreen> {
   void _filterServices() {
     if (!mounted) return;
     final query = _searchController.text.toLowerCase().trim();
-    
+
     setState(() {
       _filteredServices = query.isEmpty
-          ? _allServices
+          ? List.from(_allServices)
           : _allServices.where((s) {
               final name = (s['name'] ?? '').toLowerCase();
               final desc = (s['description'] ?? '').toLowerCase();
@@ -244,7 +262,6 @@ class _ServiceScreenState extends State<ServiceScreen> {
               ),
             ),
           ),
-
           if (_searchController.text.trim().isNotEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
@@ -253,7 +270,6 @@ class _ServiceScreenState extends State<ServiceScreen> {
                 style: const TextStyle(color: Colors.white54, fontSize: 13),
               ),
             ),
-
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator(color: Colors.white))
@@ -270,6 +286,20 @@ class _ServiceScreenState extends State<ServiceScreen> {
                                   : 'Услуги не найдены',
                               style: const TextStyle(color: Colors.white54, fontSize: 16),
                             ),
+                            if (_searchController.text.trim().isEmpty && isMasterMode) ...[
+                              const SizedBox(height: 24),
+                              ElevatedButton.icon(
+                                onPressed: () {
+                                  _loadServices();
+                                },
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Обновить'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFD47926),
+                                  foregroundColor: Colors.white,
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       )
@@ -281,21 +311,17 @@ class _ServiceScreenState extends State<ServiceScreen> {
                           final service = _filteredServices[index];
                           final serviceId = service['service_id'] as int;
                           final isSelected = _selectedServiceIds.contains(serviceId);
-                          
+
                           String? priceText;
                           String? durationText;
-                          
+
                           if (isMasterMode && _serviceDetails.containsKey(serviceId)) {
                             final details = _serviceDetails[serviceId]!;
                             final price = details['price'];
                             final duration = details['duration_min'];
-                            
+
                             if (price != null) {
-                              if (price is num) {
-                                priceText = '${price.toInt()} ₽';
-                              } else {
-                                priceText = '$price ₽';
-                              }
+                              priceText = price is num ? '${price.toInt()} ₽' : '$price ₽';
                             }
                             if (duration != null) {
                               durationText = '$duration мин';
@@ -314,7 +340,6 @@ class _ServiceScreenState extends State<ServiceScreen> {
                         },
                       ),
           ),
-
           if (_selectedServiceIds.isNotEmpty)
             Container(
               padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
@@ -331,7 +356,7 @@ class _ServiceScreenState extends State<ServiceScreen> {
                     elevation: 0,
                   ),
                   child: Text(
-                    isMasterMode 
+                    isMasterMode
                         ? 'Записаться на $totalDuration мин'
                         : 'Выбрать мастера (${_selectedServiceIds.length})',
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),

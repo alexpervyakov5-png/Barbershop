@@ -1,31 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../utils/image_upload_helper.dart';
-import '../widgets/tribe_app_bar.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'master/add_work_photo_screen.dart'; // ✅ Правильно (файл в папке master)
+import '../../utils/error_handler.dart';
 
 class MasterWorksScreen extends StatefulWidget {
   final String masterId;
   final String masterName;
-  final bool canEdit; // Может ли текущий пользователь редактировать
+  final bool canEdit;
+  final bool showAppBar;
 
   const MasterWorksScreen({
     super.key,
     required this.masterId,
     required this.masterName,
     this.canEdit = false,
+    this.showAppBar = true,
   });
 
   @override
   State<MasterWorksScreen> createState() => _MasterWorksScreenState();
 }
 
-class _MasterWorksScreenState extends State<MasterWorksScreen> 
+class _MasterWorksScreenState extends State<MasterWorksScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   List<Map<String, dynamic>> _portfolio = [];
   List<Map<String, dynamic>> _reviews = [];
   bool _isLoading = true;
-  bool _isUploading = false;
 
   @override
   void initState() {
@@ -41,13 +43,16 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
   }
 
   Future<void> _loadData() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
+
     try {
       final portfolioRes = await Supabase.instance.client
           .from('portfolio')
           .select('work_id, image_url, description, created_at')
           .eq('master_id', widget.masterId)
-          .order('created_at', ascending: false);
+          .order('created_at', ascending: false)
+          .range(0, 49);
 
       final reviewsRes = await Supabase.instance.client
           .from('reviews')
@@ -59,7 +64,8 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
             users!reviews_client_id_fkey (full_name, photo_url)
           ''')
           .eq('master_id', widget.masterId)
-          .order('created_at', ascending: false);
+          .order('created_at', ascending: false)
+          .range(0, 49);
 
       if (mounted) {
         setState(() {
@@ -69,41 +75,10 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
         });
       }
     } catch (e) {
-      debugPrint('❌ Ошибка загрузки: $e');
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _uploadPhoto() async {
-    final imageFile = await ImageUploadHelper.showImageSourceDialog(context);
-    if (imageFile == null) return;
-
-    setState(() => _isUploading = true);
-    
-    final success = await ImageUploadHelper.uploadPortfolioImage(
-      masterId: widget.masterId,
-      imageFile: imageFile,
-      description: null,
-    );
-
-    setState(() => _isUploading = false);
-
-    if (mounted) {
-      if (success != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Фото загружено'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        _loadData();
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Ошибка загрузки'),
-            backgroundColor: Colors.red,
-          ),
-        );
+      ErrorHandler.logError('MasterWorksScreen._loadData', e);
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ErrorHandler.showErrorSnackBar(context, e);
       }
     }
   }
@@ -114,6 +89,10 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF444444),
         title: const Text('Удалить фото?', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'Вы уверены, что хотите удалить это фото?',
+          style: TextStyle(color: Colors.white70),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -127,30 +106,40 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
       ),
     );
 
-    if (confirm != true) return;
+    if (confirm != true || !mounted) return;
 
-    final success = await ImageUploadHelper.deletePortfolioImage(
-      workId: workId,
-      imageUrl: imageUrl,
-    );
+    try {
+      final fileName = imageUrl.split('/').last;
+      await Supabase.instance.client.storage.from('portfolio').remove([fileName]);
 
-    if (mounted) {
-      if (success) {
-        _loadData();
-      } else {
+      await Supabase.instance.client
+          .from('portfolio')
+          .delete()
+          .eq('work_id', workId);
+
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Ошибка удаления'),
-            backgroundColor: Colors.red,
+            content: Text('✅ Фото удалено'),
+            backgroundColor: Colors.green,
           ),
         );
+        _loadData();
+      }
+    } catch (e) {
+      ErrorHandler.logError('MasterWorksScreen._deletePhoto', e);
+      if (mounted) {
+        ErrorHandler.showErrorSnackBar(context, e);
       }
     }
   }
 
   String _formatDate(String dateStr) {
     final dt = DateTime.parse(dateStr);
-    const months = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+    const months = [
+      'янв', 'фев', 'мар', 'апр', 'май', 'июн',
+      'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'
+    ];
     return '${dt.day} ${months[dt.month - 1]} ${dt.year}';
   }
 
@@ -158,40 +147,15 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF363636),
-      appBar: const TribeAppBar(),
+      appBar: widget.showAppBar
+          ? AppBar(
+              backgroundColor: const Color(0xFF363636),
+              title: Text(widget.masterName, style: const TextStyle(color: Colors.white)),
+              centerTitle: true,
+            )
+          : null,
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    widget.masterName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                if (widget.canEdit)
-                  IconButton(
-                    onPressed: _isUploading ? null : _uploadPhoto,
-                    icon: _isUploading
-                        ? const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.add_photo_alternate, color: Colors.white),
-                  ),
-              ],
-            ),
-          ),
           TabBar(
             controller: _tabController,
             labelColor: Colors.white,
@@ -205,11 +169,33 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
                 ? const Center(child: CircularProgressIndicator(color: Colors.white))
                 : TabBarView(
                     controller: _tabController,
-                    children: [_buildPortfolioTab(), _buildReviewsTab()],
+                    children: [
+                      _buildPortfolioTab(),
+                      _buildReviewsTab(),
+                    ],
                   ),
           ),
         ],
       ),
+      floatingActionButton: widget.canEdit
+          ? FloatingActionButton.extended(
+              onPressed: () async {
+                final result = await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AddWorkPhotoScreen()),
+                );
+                if (result == true && mounted) {
+                  _loadData();
+                }
+              },
+              backgroundColor: const Color(0xFFD47926),
+              icon: const Icon(Icons.add_a_photo, color: Colors.white),
+              label: const Text(
+                'Добавить',
+                style: TextStyle(color: Colors.white),
+              ),
+            )
+          : null,
     );
   }
 
@@ -221,16 +207,33 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
           children: [
             Icon(Icons.photo_library_outlined, size: 64, color: Colors.white24),
             const SizedBox(height: 16),
-            const Text('Пока нет примеров работ', style: TextStyle(color: Colors.white54)),
+            const Text(
+              'Пока нет примеров работ',
+              style: TextStyle(color: Colors.white54, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Добавьте первые работы',
+              style: TextStyle(color: Colors.white38, fontSize: 14),
+            ),
             if (widget.canEdit) ...[
               const SizedBox(height: 24),
               ElevatedButton.icon(
-                onPressed: _uploadPhoto,
+                onPressed: () async {
+                  final result = await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const AddWorkPhotoScreen()),
+                  );
+                  if (result == true && mounted) {
+                    _loadData();
+                  }
+                },
                 icon: const Icon(Icons.add),
                 label: const Text('Добавить фото'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFD47926),
                   foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 ),
               ),
             ],
@@ -239,81 +242,81 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
       );
     }
 
-    return GridView.builder(
-      padding: const EdgeInsets.all(16),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        childAspectRatio: 0.8,
-      ),
-      itemCount: _portfolio.length,
-      itemBuilder: (context, index) {
-        final work = _portfolio[index];
-        return Stack(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.network(
-                    work['image_url'],
-                    fit: BoxFit.cover,
-                    loadingBuilder: (context, child, progress) {
-                      if (progress == null) return child;
-                      return Container(
-                        color: const Color(0xFF444444),
-                        child: const Center(
-                          child: CircularProgressIndicator(color: Colors.white54),
-                        ),
-                      );
-                    },
-                    errorBuilder: (_, __, ___) => Container(
-                      color: const Color(0xFF444444),
-                      child: const Icon(Icons.broken_image, color: Colors.white38),
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: const Color(0xFFD47926),
+      child: GridView.builder(
+        padding: const EdgeInsets.all(16),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+          childAspectRatio: 0.8,
+        ),
+        itemCount: _portfolio.length,
+        itemBuilder: (context, index) {
+          final work = _portfolio[index];
+          return Stack(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: CachedNetworkImage(
+                  imageUrl: work['image_url'],
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => Container(
+                    color: const Color(0xFF444444),
+                    child: const Center(
+                      child: CircularProgressIndicator(color: Colors.white54),
                     ),
                   ),
-                  if (work['description'] != null && work['description'].toString().isNotEmpty)
-                    Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [Colors.transparent, Colors.black.withOpacity(0.7)],
-                        ),
-                      ),
-                      padding: const EdgeInsets.all(8),
-                      alignment: Alignment.bottomLeft,
-                      child: Text(
-                        work['description'],
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            if (widget.canEdit)
-              Positioned(
-                top: 8,
-                right: 8,
-                child: GestureDetector(
-                  onTap: () => _deletePhoto(work['work_id'], work['image_url']),
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.6),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.close, color: Colors.white, size: 16),
+                  errorWidget: (context, url, error) => Container(
+                    color: const Color(0xFF444444),
+                    child: const Icon(Icons.broken_image, color: Colors.white38),
                   ),
                 ),
               ),
-          ],
-        );
-      },
+              if (work['description'] != null &&
+                  work['description'].toString().isNotEmpty)
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withValues(alpha: 0.7),
+                      ],
+                    ),
+                  ),
+                  padding: const EdgeInsets.all(8),
+                  alignment: Alignment.bottomLeft,
+                  child: Text(
+                    work['description'],
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              if (widget.canEdit)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: GestureDetector(
+                    onTap: () => _deletePhoto(work['work_id'], work['image_url']),
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.6),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.close, color: Colors.white, size: 16),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -325,7 +328,10 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
           children: [
             Icon(Icons.rate_review_outlined, size: 64, color: Colors.white24),
             const SizedBox(height: 16),
-            const Text('Пока нет отзывов', style: TextStyle(color: Colors.white54)),
+            const Text(
+              'Пока нет отзывов',
+              style: TextStyle(color: Colors.white54, fontSize: 16),
+            ),
           ],
         ),
       );
@@ -337,8 +343,10 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
       separatorBuilder: (_, __) => const SizedBox(height: 16),
       itemBuilder: (context, index) {
         final review = _reviews[index];
-        final client = review['users!reviews_client_id_fkey'] as Map<String, dynamic>? ?? {};
-        final rating = review['rating'] as int? ?? 0;
+        final client = review['users!reviews_client_id_fkey']
+            as Map<String, dynamic>? ??
+            {};
+        final rating = (review['rating'] as num?)?.toInt() ?? 0;
         final comment = review['comment'] as String?;
         final date = _formatDate(review['created_at']);
 
@@ -362,21 +370,38 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
                     ),
                     child: client['photo_url'] != null
                         ? ClipOval(
-                            child: Image.network(
-                              client['photo_url'],
+                            child: CachedNetworkImage(
+                              imageUrl: client['photo_url'],
                               fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => Center(
+                              placeholder: (context, url) => Container(
+                                color: const Color(0xFF555555),
+                                child: const Center(
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white54,
+                                  ),
+                                ),
+                              ),
+                              errorWidget: (context, url, error) => Center(
                                 child: Text(
-                                  (client['full_name'] as String? ?? '?')[0].toUpperCase(),
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                                  (client['full_name'] as String? ?? '?')[0]
+                                      .toUpperCase(),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
                             ),
                           )
                         : Center(
                             child: Text(
-                              (client['full_name'] as String? ?? '?')[0].toUpperCase(),
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                              (client['full_name'] as String? ?? '?')[0]
+                                  .toUpperCase(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                   ),
@@ -387,18 +412,30 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
                       children: [
                         Text(
                           client['full_name'] ?? 'Клиент',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
-                        Text(date, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                        Text(
+                          date,
+                          style: const TextStyle(
+                            color: Colors.white54,
+                            fontSize: 12,
+                          ),
+                        ),
                       ],
                     ),
                   ),
                   Row(
-                    children: List.generate(5, (i) => Icon(
-                      i < rating ? Icons.star : Icons.star_border,
-                      color: const Color(0xFFD4AF37),
-                      size: 16,
-                    )),
+                    children: List.generate(
+                      5,
+                      (i) => Icon(
+                        i < rating ? Icons.star : Icons.star_border,
+                        color: const Color(0xFFD4AF37),
+                        size: 16,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -406,7 +443,11 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
                 const SizedBox(height: 12),
                 Text(
                   comment,
-                  style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                    height: 1.4,
+                  ),
                 ),
               ],
             ],
