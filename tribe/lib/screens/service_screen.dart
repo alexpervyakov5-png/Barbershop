@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../widgets/tribe_app_bar.dart';
 import '../utils/error_handler.dart';
-import '../utils/cache_service.dart';
 import 'master_list_screen.dart';
 import 'appointment_time_screen.dart';
 

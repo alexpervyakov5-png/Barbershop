@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../widgets/tribe_app_bar.dart';
 import '../utils/error_handler.dart';
+import '../utils/appointment_status.dart';
 
 class AppointmentTimeScreen extends StatefulWidget {
   final String masterId;
@@ -117,11 +118,12 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
 
       if (availabilityResponse.isEmpty) return {};
 
+      // ✅ ИСПРАВЛЕНО: используем status_id вместо status
       final appointmentsResponse = await Supabase.instance.client
           .from('appointments')
           .select('start_datetime, end_datetime')
           .eq('barber_id', barberId)
-          .eq('status', 'забронировано')
+          .eq('status_id', AppointmentStatus.booked)
           .gte('start_datetime', '$dateString 00:00:00')
           .lte('start_datetime', '$dateString 23:59:59');
 
@@ -252,17 +254,17 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
         throw Exception('Пользователь не авторизован');
       }
 
-      // ✅ ИСПРАВЛЕНО: Создаём отдельную запись для каждой услуги
       final serviceIds = widget.serviceIds ?? [widget.serviceId!];
       
       for (var serviceId in serviceIds) {
+        // ✅ ИСПРАВЛЕНО: используем status_id вместо status
         await Supabase.instance.client.from('appointments').insert({
           'client_id': userId,
           'barber_id': widget.masterId,
           'service_id': serviceId,
           'start_datetime': selectedDateTime.toIso8601String(),
           'end_datetime': endDateTime.toIso8601String(),
-          'status': 'забронировано',
+          'status_id': AppointmentStatus.booked,
         });
       }
 

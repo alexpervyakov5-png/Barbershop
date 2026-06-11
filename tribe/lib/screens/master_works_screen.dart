@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'master/add_work_photo_screen.dart'; // ✅ Правильно (файл в папке master)
-import '../../utils/error_handler.dart';
+import '../utils/error_handler.dart';
+import '../utils/yandex_storage_service.dart';
+import 'master/add_work_photo_screen.dart';
 
 class MasterWorksScreen extends StatefulWidget {
   final String masterId;
@@ -109,9 +110,15 @@ class _MasterWorksScreenState extends State<MasterWorksScreen>
     if (confirm != true || !mounted) return;
 
     try {
+      // Извлекаем имя файла из URL Yandex Cloud
       final fileName = imageUrl.split('/').last;
-      await Supabase.instance.client.storage.from('portfolio').remove([fileName]);
+      
+      debugPrint('🗑️ Deleting from Yandex Cloud: $fileName');
+      
+      // Удаляем из Yandex Cloud
+      await YandexStorageService().deleteFile(fileName);
 
+      // Удаляем запись из Supabase
       await Supabase.instance.client
           .from('portfolio')
           .delete()

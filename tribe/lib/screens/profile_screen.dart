@@ -3,7 +3,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../widgets/tribe_app_bar.dart';
 import '../utils/error_handler.dart';
 import '../utils/cache_service.dart';
+import '../utils/appointment_status.dart';
+import '../utils/review_status.dart';
 import 'edit_profile_screen.dart';
+import 'client/add_review_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -19,7 +22,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isRefreshing = false;
   String _activeTab = 'upcoming';
 
-  // 🔥 Кеширование
   final CacheService _cache = CacheService();
   String? _userId;
 
@@ -33,7 +35,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _loadProfile({bool forceRefresh = false}) async {
     if (!mounted || _userId == null) return;
 
-    // 🔥 При первом запуске показываем кеш сразу
     if (!forceRefresh) {
       final cachedAppointments = await _cache.getFromStorage<List>(
         'appointments_${_activeTab}_$_userId',
@@ -60,18 +61,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _isLoading = _appointments.isEmpty);
 
     try {
-      // Загружаем пользователя
       final userResponse = await Supabase.instance.client
           .from('users')
           .select('user_id, full_name, email, phone, photo_url')
           .eq('user_id', _userId!)
           .single();
 
-      // 🔥 Кешируем пользователя на 30 минут
       await _cache.set('user_$_userId', userResponse,
           duration: const Duration(minutes: 30));
 
-      //  Правильная фильтрация по дате
       final now = DateTime.now().toIso8601String();
 
       List<dynamic> appointmentsResponse;
@@ -83,12 +81,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               appointment_id,
               start_datetime,
               end_datetime,
-              status,
+              status_id,
               services (name),
-              users!appointments_barber_id_fkey (full_name)
+              barber:users!appointments_barber_id_fkey (user_id, full_name),
+              reviews (review_id, status_id)
             ''')
             .eq('client_id', _userId!)
-            .eq('status', 'забронировано')
+            .eq('status_id', AppointmentStatus.booked)
             .gte('start_datetime', now)
             .order('start_datetime', ascending: true);
       } else {
@@ -98,16 +97,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
               appointment_id,
               start_datetime,
               end_datetime,
-              status,
+              status_id,
               services (name),
-              users!appointments_barber_id_fkey (full_name)
+              barber:users!appointments_barber_id_fkey (user_id, full_name),
+              reviews (review_id, status_id)
             ''')
             .eq('client_id', _userId!)
-            .or('status.eq.завершено,status.eq.отменено,start_datetime.lt.$now')
+            .or('status_id.eq.${AppointmentStatus.completed},status_id.eq.${AppointmentStatus.cancelled},start_datetime.lt.$now')
             .order('start_datetime', ascending: false);
       }
 
-      // 🔥 Кешируем записи на 2 минуты
+      if (appointmentsResponse.isNotEmpty) {
+        debugPrint('📋 Appointments response:');
+        debugPrint('   First item: ${appointmentsResponse.first}');
+      }
+
       final appointmentsList = List<Map<String, dynamic>>.from(appointmentsResponse);
       await _cache.set(
         'appointments_${_activeTab}_$_userId',
@@ -129,7 +133,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _isRefreshing = false;
       });
 
-      //  Если есть кеш, показываем его даже при ошибке
       if (_appointments.isEmpty) {
         final cachedAppointments = await _cache.getFromStorage<List>(
           'appointments_${_activeTab}_$_userId',
@@ -154,7 +157,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await _loadProfile(forceRefresh: true);
   }
 
-  // ✅ Открытие экрана редактирования профиля
   Future<void> _openEditProfile() async {
     if (_user == null) return;
 
@@ -167,10 +169,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
 
-    // Если профиль был обновлён, перезагружаем данные
     if (result == true && mounted) {
-      // 🔥 Очищаем кеш пользователя, чтобы загрузить свежие данные
       await _cache.clear('user_$_userId');
+      _loadProfile(forceRefresh: true);
+    }
+  }
+
+  Future<void> _openAddReview({
+    required int appointmentId,
+    required String masterId,
+    required String masterName,
+  }) async {
+    if (masterId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Ошибка: не удалось определить мастера'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddReviewScreen(
+          masterId: masterId,
+          masterName: masterName,
+          appointmentId: appointmentId,
+        ),
+      ),
+    );
+
+    if (result == true && mounted) {
+      await _cache.clear('appointments_past_$_userId');
       _loadProfile(forceRefresh: true);
     }
   }
@@ -200,7 +232,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       await Supabase.instance.client
           .from('appointments')
-          .update({'status': 'отменено'})
+          .update({'status_id': AppointmentStatus.cancelled})
           .eq('appointment_id', appointmentId);
 
       if (!mounted) return;
@@ -211,7 +243,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       );
 
-      // 🔥 Очищаем кеш после отмены
       await _cache.clear('appointments_upcoming_$_userId');
       await _cache.clear('appointments_past_$_userId');
 
@@ -233,19 +264,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final weekday = weekdays[dt.weekday - 1];
     const months = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
     return '$weekday, ${dt.day} ${months[dt.month - 1]}, ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-  }
-
-  static Color _getStatusColor(String status) {
-    switch (status) {
-      case 'забронировано':
-        return const Color(0xFF4CAF50);
-      case 'отменено':
-        return const Color(0xFFF44336);
-      case 'завершено':
-        return const Color(0xFF9E9E9E);
-      default:
-        return Colors.white;
-    }
   }
 
   Future<void> _signOut() async {
@@ -271,9 +289,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (confirm != true) return;
 
     try {
-      // 🔥 Очищаем кеш при выходе
       await _cache.clear();
-
       await Supabase.instance.client.auth.signOut();
     } on AuthRetryableFetchException catch (e) {
       debugPrint('⚠️ Network error during signOut: $e');
@@ -361,7 +377,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ],
                           ),
                         ),
-                        // ✅ Кнопка редактирования профиля
                         IconButton(
                           icon: const Icon(Icons.edit, color: Colors.white54),
                           onPressed: _openEditProfile,
@@ -514,22 +529,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               final appt = _appointments[index];
                               final service =
                                   appt['services'] as Map<String, dynamic>? ?? {};
-                              final barber = appt[
-                                      'users!appointments_barber_id_fkey']
-                                  as Map<String, dynamic>? ?? {};
+                              
+                              final barber = appt['barber'] as Map<String, dynamic>? ?? {};
+                              
+                              // ✅ Получаем все отзывы
+                              final reviews = appt['reviews'] as List<dynamic>? ?? [];
+                              
+                              // ✅ Проверяем статусы отзывов
+                              final hasPublishedReview = reviews.any(
+                                (r) => r['status_id'] == ReviewStatus.published,
+                              );
+                              final hasPendingReview = reviews.any(
+                                (r) => r['status_id'] == ReviewStatus.pending,
+                              );
+                              final hasRejectedReview = reviews.any(
+                                (r) => r['status_id'] == ReviewStatus.rejected,
+                              );
+                              
+                              // ✅ hasReview = true только если есть опубликованный отзыв
+                              final hasReview = hasPublishedReview;
+                              
+                              final statusId = appt['status_id'] as int? ?? AppointmentStatus.booked;
+                              
+                              final barberId = barber['user_id']?.toString() ?? '';
+                              final barberName = barber['full_name']?.toString() ?? 'Мастер';
 
                               return _AppointmentCard(
                                 appointmentId: appt['appointment_id'],
                                 serviceName: service['name'] ?? 'Услуга',
-                                masterName: barber['full_name'] ?? 'Мастер',
+                                masterName: barberName,
+                                masterId: barberId,
                                 dateTime: _formatDateTime(appt['start_datetime']),
                                 duration: _calculateDuration(
                                   appt['start_datetime'],
                                   appt['end_datetime'],
                                 ),
-                                status: appt['status'],
-                                onCancel: _activeTab == 'upcoming'
+                                statusId: statusId,
+                                hasReview: hasReview,
+                                hasPendingReview: hasPendingReview,
+                                hasRejectedReview: hasRejectedReview,
+                                onCancel: _activeTab == 'upcoming' && statusId == AppointmentStatus.booked
                                     ? () => _cancelAppointment(appt['appointment_id'])
+                                    : null,
+                                onReview: _activeTab == 'past' && 
+                                          statusId == AppointmentStatus.completed && 
+                                          !hasReview &&
+                                          !hasPendingReview &&
+                                          barberId.isNotEmpty
+                                    ? () => _openAddReview(
+                                          appointmentId: appt['appointment_id'],
+                                          masterId: barberId,
+                                          masterName: barberName,
+                                        )
                                     : null,
                               );
                             },
@@ -578,26 +629,37 @@ class _AppointmentCard extends StatelessWidget {
   final int appointmentId;
   final String serviceName;
   final String masterName;
+  final String masterId;
   final String dateTime;
   final String duration;
-  final String status;
+  final int statusId;
+  final bool hasReview;
+  final bool hasPendingReview;
+  final bool hasRejectedReview;
   final VoidCallback? onCancel;
+  final VoidCallback? onReview;
 
   const _AppointmentCard({
     required this.appointmentId,
     required this.serviceName,
     required this.masterName,
+    required this.masterId,
     required this.dateTime,
     required this.duration,
-    required this.status,
+    required this.statusId,
+    required this.hasReview,
+    required this.hasPendingReview,
+    required this.hasRejectedReview,
     this.onCancel,
+    this.onReview,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isCancelled = status == 'отменено';
-    final isCompleted = status == 'завершено';
-    final statusColor = _ProfileScreenState._getStatusColor(status);
+    final isCancelled = statusId == AppointmentStatus.cancelled;
+    final isCompleted = statusId == AppointmentStatus.completed;
+    final statusColor = AppointmentStatus.getColor(statusId);
+    final statusText = AppointmentStatus.getDisplayName(statusId);
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -638,11 +700,7 @@ class _AppointmentCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
-                  status == 'забронировано'
-                      ? 'Активно'
-                      : status == 'отменено'
-                          ? 'Отменено'
-                          : 'Завершено',
+                  statusText,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 11,
@@ -700,6 +758,154 @@ class _AppointmentCard extends StatelessWidget {
               ),
             ],
           ),
+          
+          // ✅ Индикатор "Отзыв опубликован"
+          if (hasReview) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: ReviewStatus.getColor(ReviewStatus.published).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: ReviewStatus.getColor(ReviewStatus.published).withValues(alpha: 0.3),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    ReviewStatus.getIcon(ReviewStatus.published),
+                    color: ReviewStatus.getColor(ReviewStatus.published),
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Отзыв опубликован',
+                    style: TextStyle(
+                      color: ReviewStatus.getColor(ReviewStatus.published),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          
+          // ✅ Индикатор "Отзыв на модерации"
+          if (hasPendingReview && !hasReview) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: ReviewStatus.getColor(ReviewStatus.pending).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: ReviewStatus.getColor(ReviewStatus.pending).withValues(alpha: 0.3),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    ReviewStatus.getIcon(ReviewStatus.pending),
+                    color: ReviewStatus.getColor(ReviewStatus.pending),
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Отзыв на модерации',
+                    style: TextStyle(
+                      color: ReviewStatus.getColor(ReviewStatus.pending),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          
+          // ✅ Индикатор "Отзыв отклонён" + кнопка отправить заново
+          if (hasRejectedReview && !hasReview && !hasPendingReview) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: ReviewStatus.getColor(ReviewStatus.rejected).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: ReviewStatus.getColor(ReviewStatus.rejected).withValues(alpha: 0.3),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    ReviewStatus.getIcon(ReviewStatus.rejected),
+                    color: ReviewStatus.getColor(ReviewStatus.rejected),
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Отзыв отклонён',
+                    style: TextStyle(
+                      color: ReviewStatus.getColor(ReviewStatus.rejected),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: onReview,
+                icon: const Icon(Icons.refresh, size: 18),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFD47926),
+                  side: const BorderSide(color: Color(0xFFD47926)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+                label: const Text(
+                  'Отправить отзыв заново',
+                  style: TextStyle(fontSize: 14),
+                ),
+              ),
+            ),
+          ],
+          
+          // ✅ Кнопка "Оставить отзыв" (если нет ни одного отзыва)
+          if (onReview != null && !hasReview && !hasPendingReview && !hasRejectedReview) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: onReview,
+                icon: const Icon(Icons.rate_review, size: 18),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFD47926),
+                  side: const BorderSide(color: Color(0xFFD47926)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+                label: const Text(
+                  'Оставить отзыв',
+                  style: TextStyle(fontSize: 14),
+                ),
+              ),
+            ),
+          ],
+          
+          // ✅ Кнопка "Отменить запись"
           if (onCancel != null && !isCancelled && !isCompleted) ...[
             const SizedBox(height: 16),
             SizedBox(

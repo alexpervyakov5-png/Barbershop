@@ -312,7 +312,11 @@ class _MasterAvailabilityScreenState extends State<MasterAvailabilityScreen> {
         );
         if (picked != null && mounted) {
           setState(() {
-            if (isStart) _startTime = picked; else _endTime = picked;
+            if (isStart) {
+              _startTime = picked;
+            } else {
+              _endTime = picked;
+            }
           });
         }
       },
@@ -393,7 +397,7 @@ class _MasterAvailabilityScreenState extends State<MasterAvailabilityScreen> {
                         background: Container(
                           alignment: Alignment.centerRight,
                           padding: const EdgeInsets.only(right: 20),
-                          decoration: BoxDecoration(color: Colors.red.withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
+                          decoration: BoxDecoration(color: Colors.red.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(8)),
                           child: const Icon(Icons.delete, color: Colors.red),
                         ),
                         confirmDismiss: (direction) async {

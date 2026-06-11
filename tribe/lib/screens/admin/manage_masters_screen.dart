@@ -70,9 +70,10 @@ class _ManageMastersScreenState extends State<ManageMastersScreen> {
   }
 
   Future<void> _editMaster(Map<String, dynamic> master) async {
+    // ✅ ИСПРАВЛЕНО: было existingMaster: master, стало master: master
     final result = await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => AddEditMasterScreen(existingMaster: master)),
+      MaterialPageRoute(builder: (_) => AddEditMasterScreen(master: master)),
     );
     if (result == true && mounted) _loadMasters();
   }

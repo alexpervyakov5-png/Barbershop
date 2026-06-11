@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../widgets/tribe_app_bar.dart';
 import '../../utils/error_handler.dart';
 import '../../utils/cache_service.dart';
+import '../../utils/appointment_status.dart';
 import 'edit_master_profile_screen.dart';
 
 class MasterProfileScreen extends StatefulWidget {
@@ -38,25 +39,29 @@ class _MasterProfileScreenState extends State<MasterProfileScreen> {
   @override
   void initState() {
     super.initState();
+    debugPrint('🔍 MasterProfileScreen init: masterId = ${widget.masterId}');
     _loadProfile();
   }
 
   Future<void> _loadProfile({bool forceRefresh = false}) async {
     if (!mounted) return;
 
+    debugPrint('📊 Loading profile for master: ${widget.masterId}');
+    debugPrint('📊 Active tab: $_activeTab');
+    debugPrint('📊 Force refresh: $forceRefresh');
+
     setState(() {
       _hasError = false;
       _errorMessage = '';
     });
 
-    // 🔥 Сначала показываем кеш
     if (!forceRefresh) {
       final cachedAppointments = await _cache.getFromStorage<List>(
         'master_appointments_${_activeTab}_${widget.masterId}',
       );
 
       if (cachedAppointments != null) {
-        debugPrint('✅ Master appointments loaded from cache ($_activeTab)');
+        debugPrint('✅ Master appointments loaded from cache ($_activeTab): ${cachedAppointments.length} items');
         if (mounted) {
           setState(() {
             _appointments = List<Map<String, dynamic>>.from(cachedAppointments);
@@ -73,7 +78,6 @@ class _MasterProfileScreenState extends State<MasterProfileScreen> {
       }
     }
 
-    // Если уже есть данные из кеша, не показываем индикатор загрузки
     if (_appointments.isNotEmpty || _master != null) {
       setState(() => _isLoading = false);
     } else {
@@ -82,6 +86,7 @@ class _MasterProfileScreenState extends State<MasterProfileScreen> {
 
     try {
       // Загружаем данные мастера
+      debugPrint('👤 Loading master data...');
       final masterResponse = await Supabase.instance.client
           .from('users')
           .select('user_id, full_name, email, phone, photo_url, master_rank, is_active')
@@ -89,47 +94,63 @@ class _MasterProfileScreenState extends State<MasterProfileScreen> {
           .maybeSingle()
           .timeout(const Duration(seconds: 10));
 
+      debugPrint('✅ Master data loaded: ${masterResponse != null ? "success" : "null"}');
+
       if (masterResponse != null) {
         await _cache.set('master_${widget.masterId}', masterResponse,
             duration: const Duration(minutes: 30));
       }
 
-      // ✅ Правильная фильтрация по дате
       final now = DateTime.now().toIso8601String();
+      debugPrint('📅 Current time: $now');
 
       List<dynamic> appointmentsResponse;
 
       if (_activeTab == 'upcoming') {
+        debugPrint('📋 Loading upcoming appointments...');
+        // ✅ ИСПРАВЛЕНО: используем более простой запрос без алиаса
         appointmentsResponse = await Supabase.instance.client
             .from('appointments')
             .select('''
               appointment_id,
               start_datetime,
               end_datetime,
-              status,
+              status_id,
+              barber_id,
+              client_id,
               services (service_id, name),
               users!appointments_client_id_fkey (user_id, full_name, phone)
             ''')
             .eq('barber_id', widget.masterId)
-            .eq('status', 'забронировано')
+            .eq('status_id', AppointmentStatus.booked)
             .gte('start_datetime', now)
             .order('start_datetime', ascending: true)
             .timeout(const Duration(seconds: 10));
       } else {
+        debugPrint('📋 Loading past appointments...');
         appointmentsResponse = await Supabase.instance.client
             .from('appointments')
             .select('''
               appointment_id,
               start_datetime,
               end_datetime,
-              status,
+              status_id,
+              barber_id,
+              client_id,
               services (service_id, name),
               users!appointments_client_id_fkey (user_id, full_name, phone)
             ''')
             .eq('barber_id', widget.masterId)
-            .or('status.eq.завершено,status.eq.отменено,start_datetime.lt.$now')
+            .or('status_id.eq.${AppointmentStatus.completed},status_id.eq.${AppointmentStatus.cancelled},start_datetime.lt.$now')
             .order('start_datetime', ascending: false)
             .timeout(const Duration(seconds: 10));
+      }
+
+      debugPrint('✅ Appointments loaded: ${appointmentsResponse.length} items');
+      
+      // ✅ Отладка: выводим первый элемент
+      if (appointmentsResponse.isNotEmpty) {
+        debugPrint('📋 First appointment: ${appointmentsResponse.first}');
       }
 
       final appointmentsList = List<Map<String, dynamic>>.from(appointmentsResponse);
@@ -148,14 +169,12 @@ class _MasterProfileScreenState extends State<MasterProfileScreen> {
         _hasError = false;
       });
     } on SocketException catch (e) {
-      // ✅ Исправлено: только SocketException (включает HttpException)
       ErrorHandler.logError('MasterProfileScreen._loadProfile (Network)', e);
       _handleNetworkError('Нет подключения к интернету. Проверьте соединение.');
     } catch (e) {
-      // ✅ Исправлено: общий catch для всех остальных ошибок
       ErrorHandler.logError('MasterProfileScreen._loadProfile', e);
+      debugPrint('❌ Error loading profile: $e');
       
-      // Fallback на кеш
       if (_appointments.isEmpty) {
         final cachedAppointments = await _cache.getFromStorage<List>(
           'master_appointments_${_activeTab}_${widget.masterId}',
@@ -187,13 +206,12 @@ class _MasterProfileScreenState extends State<MasterProfileScreen> {
         _errorMessage = message;
       });
 
-      // Показываем кеш если есть
       if (_appointments.isEmpty) {
         _cache.getFromStorage<List>('master_appointments_${_activeTab}_${widget.masterId}').then((cached) {
           if (cached != null && mounted) {
             setState(() {
               _appointments = List<Map<String, dynamic>>.from(cached);
-              _hasError = false; // Не показываем ошибку если есть кеш
+              _hasError = false;
             });
           }
         });
@@ -250,7 +268,7 @@ class _MasterProfileScreenState extends State<MasterProfileScreen> {
     try {
       await Supabase.instance.client
           .from('appointments')
-          .update({'status': 'отменено'})
+          .update({'status_id': AppointmentStatus.cancelled})
           .eq('appointment_id', appointmentId);
 
       if (mounted) {
@@ -314,7 +332,6 @@ class _MasterProfileScreenState extends State<MasterProfileScreen> {
                   color: const Color(0xFFD47926),
                   child: Column(
                     children: [
-                      // 👤 Профиль мастера
                       Container(
                         padding: const EdgeInsets.all(24),
                         decoration: const BoxDecoration(
@@ -353,98 +370,23 @@ class _MasterProfileScreenState extends State<MasterProfileScreen> {
                         ),
                       ),
 
-                      // 📋 Табы
                       Padding(
                         padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
                         child: Container(
                           decoration: BoxDecoration(color: const Color(0xFF444444), borderRadius: BorderRadius.circular(8)),
                           child: Row(
                             children: [
-                              Expanded(
-                                child: GestureDetector(
-                                  onTap: () {
-                                    if (!mounted) return;
-                                    setState(() {
-                                      _activeTab = 'upcoming';
-                                      _loadProfile();
-                                    });
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(vertical: 12),
-                                    decoration: BoxDecoration(color: _activeTab == 'upcoming' ? const Color(0xFFD47926) : Colors.transparent, borderRadius: const BorderRadius.horizontal(left: Radius.circular(8))),
-                                    child: Center(child: Text('Активные', style: TextStyle(color: _activeTab == 'upcoming' ? Colors.white : Colors.white54, fontSize: 14, fontWeight: FontWeight.w500))),
-                                  ),
-                                ),
-                              ),
-                              Expanded(
-                                child: GestureDetector(
-                                  onTap: () {
-                                    if (!mounted) return;
-                                    setState(() {
-                                      _activeTab = 'past';
-                                      _loadProfile();
-                                    });
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(vertical: 12),
-                                    decoration: BoxDecoration(color: _activeTab == 'past' ? const Color(0xFFD47926) : Colors.transparent, borderRadius: const BorderRadius.horizontal(right: Radius.circular(8))),
-                                    child: Center(child: Text('Прошедшие', style: TextStyle(color: _activeTab == 'past' ? Colors.white : Colors.white54, fontSize: 14, fontWeight: FontWeight.w500))),
-                                  ),
-                                ),
-                              ),
+                              _buildTab('Активные', 'upcoming'),
+                              _buildTab('Прошедшие', 'past'),
                             ],
                           ),
                         ),
                       ),
 
-                      // 📅 Список записей
                       Expanded(
-                        child: _appointments.isEmpty
-                            ? ListView(
-                                children: [
-                                  SizedBox(
-                                    height: MediaQuery.of(context).size.height * 0.4,
-                                    child: Center(
-                                      child: Column(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          Icon(_activeTab == 'upcoming' ? Icons.event_busy : Icons.history, size: 64, color: Colors.white24),
-                                          const SizedBox(height: 16),
-                                          Text(_activeTab == 'upcoming' ? 'Нет активных записей' : 'Нет прошедших записей', style: const TextStyle(color: Colors.white54, fontSize: 16)),
-                                          const SizedBox(height: 8),
-                                          Text(_activeTab == 'upcoming' ? 'Клиенты пока не записались' : 'История записей пуста', style: const TextStyle(color: Colors.white38, fontSize: 13)),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              )
-                            : ListView.separated(
-                                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                                itemCount: _appointments.length,
-                                separatorBuilder: (_, __) => const SizedBox(height: 12),
-                                itemBuilder: (context, index) {
-                                  final appt = _appointments[index];
-                                  final service = appt['services'] as Map<String, dynamic>? ?? {};
-                                  final client = appt['users!appointments_client_id_fkey'] as Map<String, dynamic>? ?? {};
-                                  final status = appt['status'] as String? ?? 'забронировано';
-
-                                  return _AppointmentCard(
-                                    appointmentId: appt['appointment_id'],
-                                    serviceName: service['name'] ?? 'Услуга',
-                                    clientName: client['full_name'] ?? 'Клиент',
-                                    clientPhone: client['phone'],
-                                    dateTime: _formatDateTime(appt['start_datetime']),
-                                    duration: _calculateDuration(appt['start_datetime'], appt['end_datetime']),
-                                    status: status,
-                                    canCancel: _activeTab == 'upcoming' && status == 'забронировано',
-                                    onCancel: () => _cancelAppointment(appt['appointment_id']),
-                                  );
-                                },
-                              ),
+                        child: _buildAppointmentsTab(),
                       ),
 
-                      // КНОПКА ВЫХОДА
                       Padding(
                         padding: const EdgeInsets.all(24),
                         child: SizedBox(
@@ -464,6 +406,89 @@ class _MasterProfileScreenState extends State<MasterProfileScreen> {
                     ],
                   ),
                 ),
+    );
+  }
+
+  Widget _buildTab(String label, String tabKey) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          if (!mounted) return;
+          setState(() {
+            _activeTab = tabKey;
+            _loadProfile();
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            color: _activeTab == tabKey ? const Color(0xFFD47926) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: _activeTab == tabKey ? Colors.white : Colors.white54,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAppointmentsTab() {
+    if (_appointments.isEmpty) {
+      return ListView(
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).size.height * 0.4,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(_activeTab == 'upcoming' ? Icons.event_busy : Icons.history, size: 64, color: Colors.white24),
+                  const SizedBox(height: 16),
+                  Text(_activeTab == 'upcoming' ? 'Нет активных записей' : 'Нет прошедших записей', style: const TextStyle(color: Colors.white54, fontSize: 16)),
+                  const SizedBox(height: 8),
+                  Text(_activeTab == 'upcoming' ? 'Клиенты пока не записались' : 'История записей пуста', style: const TextStyle(color: Colors.white38, fontSize: 13)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      itemCount: _appointments.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final appt = _appointments[index];
+        final service = appt['services'] as Map<String, dynamic>? ?? {};
+        
+        // ✅ ИСПРАВЛЕНО: используем 'users' вместо 'client'
+        final client = appt['users!appointments_client_id_fkey'] as Map<String, dynamic>? ?? {};
+        final statusId = appt['status_id'] as int? ?? AppointmentStatus.booked;
+
+        debugPrint('👤 Client data: $client');
+
+        return _AppointmentCard(
+          appointmentId: appt['appointment_id'],
+          serviceName: service['name'] ?? 'Услуга',
+          clientName: client['full_name'] ?? 'Клиент',
+          clientPhone: client['phone'],
+          dateTime: _formatDateTime(appt['start_datetime']),
+          duration: _calculateDuration(appt['start_datetime'], appt['end_datetime']),
+          statusId: statusId,
+          canCancel: _activeTab == 'upcoming' && statusId == AppointmentStatus.booked,
+          onCancel: () => _cancelAppointment(appt['appointment_id']),
+        );
+      },
     );
   }
 
@@ -522,7 +547,7 @@ class _AppointmentCard extends StatelessWidget {
   final String? clientPhone;
   final String dateTime;
   final String duration;
-  final String status;
+  final int statusId;
   final bool canCancel;
   final VoidCallback? onCancel;
 
@@ -533,17 +558,17 @@ class _AppointmentCard extends StatelessWidget {
     this.clientPhone,
     required this.dateTime,
     required this.duration,
-    required this.status,
+    required this.statusId,
     required this.canCancel,
     this.onCancel,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isCancelled = status == 'отменено';
-    final isCompleted = status == 'завершено';
-    final statusColor = status == 'забронировано' ? const Color(0xFF4CAF50) : status == 'отменено' ? const Color(0xFFF44336) : const Color(0xFF9E9E9E);
-    final statusText = status == 'забронировано' ? 'Активно' : status == 'отменено' ? 'Отменено' : 'Завершено';
+    final isCancelled = statusId == AppointmentStatus.cancelled;
+    final isCompleted = statusId == AppointmentStatus.completed;
+    final statusColor = AppointmentStatus.getColor(statusId);
+    final statusText = AppointmentStatus.getDisplayName(statusId);
 
     return Container(
       padding: const EdgeInsets.all(20),

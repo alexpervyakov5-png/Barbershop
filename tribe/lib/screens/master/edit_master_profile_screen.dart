@@ -201,7 +201,7 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
 
               // Должность
               DropdownButtonFormField<String>(
-                value: _rankOptions.contains(_rankController.text)
+                initialValue: _rankOptions.contains(_rankController.text)
                     ? _rankController.text
                     : null,
                 style: const TextStyle(color: Colors.white),
