@@ -4,7 +4,7 @@ import '../../widgets/tribe_app_bar.dart';
 import '../../utils/error_handler.dart';
 
 class AddEditMasterScreen extends StatefulWidget {
-  final Map<String, dynamic>? master; // null = создание нового
+  final Map<String, dynamic>? master;
 
   const AddEditMasterScreen({super.key, this.master});
 
@@ -18,13 +18,11 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
   final _passwordController = TextEditingController();
   final _fullNameController = TextEditingController();
   final _phoneController = TextEditingController();
-  final _photoUrlController = TextEditingController();
   
   String? _selectedRank;
   bool _isSaving = false;
   bool get _isEditing => widget.master != null;
 
-  // ✅ Допустимые значения master_rank (должны совпадать с БД)
   static const List<String> _validRanks = [
     'Основатель',
     'Старший мастер',
@@ -40,7 +38,6 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
       _emailController.text = widget.master!['email'] ?? '';
       _fullNameController.text = widget.master!['full_name'] ?? '';
       _phoneController.text = widget.master!['phone'] ?? '';
-      _photoUrlController.text = widget.master!['photo_url'] ?? '';
       _selectedRank = widget.master!['master_rank'];
     }
   }
@@ -51,7 +48,6 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
     _passwordController.dispose();
     _fullNameController.dispose();
     _phoneController.dispose();
-    _photoUrlController.dispose();
     super.dispose();
   }
 
@@ -76,79 +72,44 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
     }
   }
 
-  // ✅ Создание нового мастера
+  // ✅ Создание нового мастера через SQL функцию
   Future<void> _createMaster() async {
     final email = _emailController.text.trim().toLowerCase();
     final password = _passwordController.text.trim();
     final fullName = _fullNameController.text.trim();
     final phone = _phoneController.text.trim();
-    final photoUrl = _photoUrlController.text.trim();
+    final validRank = _validateRank(_selectedRank);
 
-    // ✅ Валидация пароля
     if (password.length < 6) {
       _showErrorDialog('Пароль должен содержать минимум 6 символов');
       return;
     }
 
-    // ✅ Валидация email
     if (!email.contains('@') || !email.contains('.')) {
       _showErrorDialog('Введите корректный email');
       return;
     }
-
-    // ✅ Валидация master_rank - должно быть null или из списка
-    final String? validRank = _validateRank(_selectedRank);
 
     debugPrint('👤 Creating master:');
     debugPrint('   email: $email');
     debugPrint('   full_name: $fullName');
     debugPrint('   master_rank: $validRank');
 
-    // ✅ ШАГ 1: Создаём пользователя в Supabase Auth
-    final authResponse = await Supabase.instance.client.auth.admin.createUser(
-      AdminUserAttributes(
-        email: email,
-        password: password,
-        emailConfirm: true,
-        userMetadata: {
-          'full_name': fullName,
-          'role': 'master',
-        },
-      ),
-    );
+    // ✅ Вызываем SQL функцию вместо auth.admin.createUser
+    final result = await Supabase.instance.client.rpc(
+      'create_master',
+      params: {
+        'p_email': email,
+        'p_password': password,
+        'p_full_name': fullName,
+        'p_phone': phone.isNotEmpty ? phone : null,
+        'p_photo_url': null, // ✅ URL фото убран
+        'p_master_rank': validRank,
+        'p_role_id': 2, // role_id = 2 для мастера
+      },
+    ).timeout(const Duration(seconds: 30));
 
-    final userId = authResponse.user?.id;
-    if (userId == null) {
-      throw Exception('Не удалось создать пользователя');
-    }
-
-    debugPrint('✅ User created in Auth: $userId');
-
-    // ✅ ШАГ 2: Создаём запись в таблице users
-    try {
-      await Supabase.instance.client.from('users').insert({
-        'user_id': userId,
-        'email': email,
-        'full_name': fullName,
-        'phone': phone.isNotEmpty ? phone : null,
-        'photo_url': photoUrl.isNotEmpty ? photoUrl : null,
-        'master_rank': validRank, // ✅ null или валидное значение
-        'role_id': 2, // role_id = 2 для мастера (проверьте в вашей БД!)
-        'is_active': true,
-      });
-
-      debugPrint('✅ User created in users table');
-    } catch (e) {
-      // ✅ Если запись в users не удалась - удаляем пользователя из Auth
-      debugPrint('❌ Failed to create user in users table: $e');
-      try {
-        await Supabase.instance.client.auth.admin.deleteUser(userId);
-        debugPrint('🗑️ Rolled back Auth user');
-      } catch (rollbackError) {
-        debugPrint('⚠️ Failed to rollback Auth user: $rollbackError');
-      }
-      rethrow;
-    }
+    debugPrint('✅ Master created: $result');
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -161,28 +122,23 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
     }
   }
 
-  // ✅ Обновление существующего мастера
   Future<void> _updateMaster() async {
     final userId = widget.master!['user_id'];
     final fullName = _fullNameController.text.trim();
     final phone = _phoneController.text.trim();
-    final photoUrl = _photoUrlController.text.trim();
     final validRank = _validateRank(_selectedRank);
 
     await Supabase.instance.client.from('users').update({
       'full_name': fullName,
       'phone': phone.isNotEmpty ? phone : null,
-      'photo_url': photoUrl.isNotEmpty ? photoUrl : null,
       'master_rank': validRank,
     }).eq('user_id', userId);
 
-    // ✅ Если изменился пароль - обновляем в Auth
     final newPassword = _passwordController.text.trim();
     if (newPassword.isNotEmpty) {
       if (newPassword.length < 6) {
         throw Exception('Пароль должен содержать минимум 6 символов');
       }
-      // ✅ ИСПРАВЛЕНО: добавлен именованный параметр 'attributes'
       await Supabase.instance.client.auth.admin.updateUserById(
         userId,
         attributes: AdminUserAttributes(password: newPassword),
@@ -200,51 +156,41 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
     }
   }
 
-  // ✅ Валидация master_rank
   String? _validateRank(String? rank) {
     if (rank == null || rank.isEmpty) return null;
     if (_validRanks.contains(rank)) return rank;
-    debugPrint('⚠️ Invalid rank: $rank. Using null.');
     return null;
   }
 
-  // ✅ Понятные сообщения об ошибках
   String _getErrorMessage(dynamic error) {
     final errorStr = error.toString().toLowerCase();
     
-    // Ошибки Auth
     if (error is AuthApiException) {
       if (errorStr.contains('user_already_exists') || 
           errorStr.contains('already registered') ||
-          // ✅ ИСПРАВЛЕНО: statusCode это String, сравниваем со строкой
           error.statusCode == '422') {
-        return '❌ Пользователь с таким email уже зарегистрирован.\n\nИспользуйте другой email или войдите в систему.';
+        return '❌ Пользователь с таким email уже зарегистрирован.\n\nИспользуйте другой email.';
+      }
+      if (errorStr.contains('not_admin') || errorStr.contains('403')) {
+        return '❌ Недостаточно прав.\n\nВаш аккаунт должен иметь роль администратора (role_id = 3).';
       }
       if (errorStr.contains('invalid email')) {
         return '❌ Некорректный email адрес';
       }
-      if (errorStr.contains('weak password')) {
-        return '❌ Слишком простой пароль. Используйте минимум 6 символов.';
-      }
-      if (errorStr.contains('permission') || errorStr.contains('403')) {
-        return '❌ Недостаточно прав. Требуется роль администратора.';
-      }
     }
     
-    // Ошибки БД
     if (error is PostgrestException) {
       if (errorStr.contains('check constraint') || errorStr.contains('master_rank')) {
-        return '❌ Недопустимое значение ранга мастера.\n\nДопустимые значения: Основатель, Старший мастер, Топ мастер, Мастер маникюра, Эксперт';
+        return '❌ Недопустимое значение ранга мастера.';
       }
       if (errorStr.contains('duplicate') || errorStr.contains('unique')) {
-        return '❌ Запись с такими данными уже существует';
+        return '❌ Пользователь с таким email уже существует';
       }
-      if (errorStr.contains('foreign key')) {
-        return '❌ Ошибка связи с другой таблицей. Проверьте role_id.';
+      if (errorStr.contains('function') || errorStr.contains('does not exist')) {
+        return '❌ Функция create_master не найдена.\n\nВыполните SQL скрипт в Supabase.';
       }
     }
     
-    // Сетевые ошибки
     if (errorStr.contains('socket') || errorStr.contains('connection')) {
       return '❌ Нет подключения к интернету';
     }
@@ -278,7 +224,6 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF363636),
-      // ✅ ИСПРАВЛЕНО: используем обычный AppBar вместо TribeAppBar с title
       appBar: AppBar(
         backgroundColor: const Color(0xFF363636),
         leading: IconButton(
@@ -308,13 +253,12 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
               ),
               const SizedBox(height: 24),
 
-              // Email
               _buildTextField(
                 controller: _emailController,
                 label: 'Email',
                 hint: 'example@mail.com',
                 keyboardType: TextInputType.emailAddress,
-                enabled: !_isEditing, // При редактировании email нельзя менять
+                enabled: !_isEditing,
                 validator: (value) {
                   if (_isEditing) return null;
                   if (value == null || value.trim().isEmpty) {
@@ -328,7 +272,6 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Пароль
               _buildTextField(
                 controller: _passwordController,
                 label: _isEditing ? 'Новый пароль (оставьте пустым если не менять)' : 'Пароль',
@@ -352,7 +295,6 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
               ),
               const SizedBox(height: 16),
 
-              // ФИО
               _buildTextField(
                 controller: _fullNameController,
                 label: 'ФИО',
@@ -366,24 +308,14 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Телефон
               _buildTextField(
                 controller: _phoneController,
                 label: 'Телефон',
                 hint: '+7 (999) 123-45-67',
                 keyboardType: TextInputType.phone,
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 24),
 
-              // URL фото
-              _buildTextField(
-                controller: _photoUrlController,
-                label: 'URL фото (необязательно)',
-                hint: 'https://...',
-              ),
-              const SizedBox(height: 16),
-
-              // Ранг мастера
               const Text(
                 'Ранг мастера',
                 style: TextStyle(
@@ -425,7 +357,6 @@ class _AddEditMasterScreenState extends State<AddEditMasterScreen> {
               ),
               const SizedBox(height: 32),
 
-              // Кнопка сохранения
               SizedBox(
                 width: double.infinity,
                 height: 54,
