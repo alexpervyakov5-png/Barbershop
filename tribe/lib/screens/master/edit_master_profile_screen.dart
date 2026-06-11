@@ -1,7 +1,10 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../widgets/tribe_app_bar.dart';
 import '../../utils/error_handler.dart';
+import '../../utils/yandex_storage_service.dart';
 
 class EditMasterProfileScreen extends StatefulWidget {
   final Map<String, dynamic> currentMaster;
@@ -19,8 +22,13 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameController;
   late final TextEditingController _phoneController;
-  late final TextEditingController _rankController;
   bool _isLoading = false;
+  bool _isUploadingAvatar = false;
+
+  File? _avatarFile;
+  String? _avatarUrl;
+
+  String? _selectedRank;
 
   static const _rankOptions = [
     'Основатель',
@@ -39,17 +47,136 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
     _phoneController = TextEditingController(
       text: widget.currentMaster['phone'] ?? '',
     );
-    _rankController = TextEditingController(
-      text: widget.currentMaster['master_rank'] ?? '',
-    );
+    _avatarUrl = widget.currentMaster['photo_url'];
+    _selectedRank = widget.currentMaster['master_rank'];
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _phoneController.dispose();
-    _rankController.dispose();
     super.dispose();
+  }
+
+  // ✅ Выбор фото (без обрезки - обрезка будет визуальной через ClipOval)
+  Future<void> _pickAvatar() async {
+    try {
+      final source = await showModalBottomSheet<ImageSource>(
+        context: context,
+        backgroundColor: const Color(0xFF363636),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (context) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 16),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Изменить фото',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: Color(0xFFD47926)),
+                title: const Text('Из галереи', style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(context, ImageSource.gallery),
+              ),
+              ListTile(
+                leading: const Icon(Icons.camera_alt, color: Color(0xFFD47926)),
+                title: const Text('Сделать фото', style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(context, ImageSource.camera),
+              ),
+              if (_avatarUrl != null || _avatarFile != null)
+                ListTile(
+                  leading: const Icon(Icons.delete_outline, color: Colors.red),
+                  title: const Text('Удалить фото', style: TextStyle(color: Colors.red)),
+                  onTap: () {
+                    setState(() {
+                      _avatarFile = null;
+                      _avatarUrl = null;
+                    });
+                    Navigator.pop(context);
+                  },
+                ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      );
+
+      if (source == null) return;
+
+      final pickedFile = await ImagePicker().pickImage(
+        source: source,
+        maxWidth: 1080,
+        maxHeight: 1080,
+        imageQuality: 85,
+      );
+
+      if (pickedFile == null) return;
+
+      setState(() {
+        _avatarFile = File(pickedFile.path);
+      });
+
+      debugPrint('✅ Avatar selected: ${_avatarFile!.path}');
+    } catch (e) {
+      ErrorHandler.logError('EditMasterProfileScreen._pickAvatar', e);
+      if (mounted) {
+        ErrorHandler.showErrorSnackBar(
+          context,
+          e,
+          customMessage: 'Не удалось выбрать фото',
+        );
+      }
+    }
+  }
+
+  Future<String?> _uploadAvatar() async {
+    if (_avatarFile == null) return _avatarUrl;
+
+    setState(() => _isUploadingAvatar = true);
+
+    try {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId == null) throw Exception('Пользователь не авторизован');
+
+      final fileName = 'avatars/${userId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      final url = await YandexStorageService().uploadFile(
+        file: _avatarFile!,
+        fileName: fileName,
+      );
+
+      debugPrint('✅ Avatar uploaded: $url');
+      return url;
+    } catch (e) {
+      ErrorHandler.logError('EditMasterProfileScreen._uploadAvatar', e);
+      if (mounted) {
+        ErrorHandler.showErrorSnackBar(
+          context,
+          e,
+          customMessage: 'Не удалось загрузить фото',
+        );
+      }
+      return null;
+    } finally {
+      if (mounted) setState(() => _isUploadingAvatar = false);
+    }
   }
 
   Future<void> _saveProfile() async {
@@ -61,14 +188,29 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
       final userId = Supabase.instance.client.auth.currentUser?.id;
       if (userId == null) throw Exception('Пользователь не авторизован');
 
+      String? newAvatarUrl = _avatarUrl;
+
+      if (_avatarFile != null) {
+        newAvatarUrl = await _uploadAvatar();
+        if (newAvatarUrl == null) {
+          setState(() => _isLoading = false);
+          return;
+        }
+      }
+
+      final String? validRank = (_selectedRank != null &&
+              _selectedRank!.isNotEmpty &&
+              _rankOptions.contains(_selectedRank))
+          ? _selectedRank
+          : null;
+
       final updateData = {
         'full_name': _nameController.text.trim(),
         'phone': _phoneController.text.trim().isNotEmpty
             ? _phoneController.text.trim()
             : null,
-        'master_rank': _rankController.text.trim().isNotEmpty
-            ? _rankController.text.trim()
-            : null,
+        'master_rank': validRank,
+        'photo_url': newAvatarUrl,
       };
 
       await Supabase.instance.client
@@ -76,7 +218,6 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
           .update(updateData)
           .eq('user_id', userId);
 
-      // Обновляем метаданные в auth.users
       await Supabase.instance.client.auth.updateUser(
         UserAttributes(
           data: {'full_name': _nameController.text.trim()},
@@ -106,6 +247,86 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
     }
   }
 
+  Widget _buildAvatar() {
+    final bool hasImage = _avatarFile != null ||
+        (_avatarUrl != null && _avatarUrl!.toString().isNotEmpty);
+
+    return Stack(
+      children: [
+        GestureDetector(
+          onTap: _isUploadingAvatar ? null : _pickAvatar,
+          child: Container(
+            width: 120,
+            height: 120,
+            decoration: BoxDecoration(
+              color: const Color(0xFF555555),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: const Color(0xFFD47926),
+                width: 2,
+              ),
+            ),
+            child: _isUploadingAvatar
+                ? const Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFFD47926),
+                      strokeWidth: 2,
+                    ),
+                  )
+                : _avatarFile != null
+                    ? ClipOval(
+                        child: Image.file(
+                          _avatarFile!,
+                          fit: BoxFit.cover,
+                          width: 120,
+                          height: 120,
+                        ),
+                      )
+                    : hasImage
+                        ? ClipOval(
+                            child: Image.network(
+                              _avatarUrl!,
+                              fit: BoxFit.cover,
+                              width: 120,
+                              height: 120,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.person,
+                                color: Colors.white54,
+                                size: 48,
+                              ),
+                            ),
+                          )
+                        : const Icon(
+                            Icons.person,
+                            color: Colors.white54,
+                            size: 48,
+                          ),
+          ),
+        ),
+        Positioned(
+          bottom: 0,
+          right: 0,
+          child: GestureDetector(
+            onTap: _isUploadingAvatar ? null : _pickAvatar,
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: const BoxDecoration(
+                color: Color(0xFFD47926),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.camera_alt,
+                color: Colors.white,
+                size: 18,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -133,38 +354,21 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
               ),
               const SizedBox(height: 32),
 
-              // Аватар
+              Center(child: _buildAvatar()),
+              const SizedBox(height: 12),
               Center(
-                child: Container(
-                  width: 100,
-                  height: 100,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF555555),
-                    shape: BoxShape.circle,
+                child: Text(
+                  _isUploadingAvatar
+                      ? 'Загрузка фото...'
+                      : 'Нажмите, чтобы изменить фото',
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 12,
                   ),
-                  child: widget.currentMaster['photo_url'] != null &&
-                          widget.currentMaster['photo_url'].toString().isNotEmpty
-                      ? ClipOval(
-                          child: Image.network(
-                            widget.currentMaster['photo_url'],
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => const Icon(
-                              Icons.person,
-                              color: Colors.white54,
-                              size: 48,
-                            ),
-                          ),
-                        )
-                      : const Icon(
-                          Icons.person,
-                          color: Colors.white54,
-                          size: 48,
-                        ),
                 ),
               ),
               const SizedBox(height: 32),
 
-              // Имя
               TextFormField(
                 controller: _nameController,
                 style: const TextStyle(color: Colors.white),
@@ -199,10 +403,9 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Должность
               DropdownButtonFormField<String>(
-                initialValue: _rankOptions.contains(_rankController.text)
-                    ? _rankController.text
+                initialValue: _selectedRank != null && _rankOptions.contains(_selectedRank)
+                    ? _selectedRank
                     : null,
                 style: const TextStyle(color: Colors.white),
                 decoration: InputDecoration(
@@ -232,14 +435,13 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
                   );
                 }).toList(),
                 onChanged: (value) {
-                  if (value != null) {
-                    _rankController.text = value;
-                  }
+                  setState(() {
+                    _selectedRank = value;
+                  });
                 },
               ),
               const SizedBox(height: 16),
 
-              // Email (только для просмотра)
               TextFormField(
                 initialValue: widget.currentMaster['email'] ?? '',
                 style: const TextStyle(color: Colors.white54),
@@ -263,7 +465,6 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Телефон
               TextFormField(
                 controller: _phoneController,
                 style: const TextStyle(color: Colors.white),
@@ -290,12 +491,11 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
               ),
               const SizedBox(height: 40),
 
-              // Кнопка "Сохранить"
               SizedBox(
                 width: double.infinity,
                 height: 54,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _saveProfile,
+                  onPressed: (_isLoading || _isUploadingAvatar) ? null : _saveProfile,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFD47926),
                     foregroundColor: Colors.white,
@@ -304,7 +504,7 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
                     ),
                     elevation: 0,
                   ),
-                  child: _isLoading
+                  child: (_isLoading || _isUploadingAvatar)
                       ? const SizedBox(
                           width: 24,
                           height: 24,
@@ -324,12 +524,11 @@ class _EditMasterProfileScreenState extends State<EditMasterProfileScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Кнопка "Отмена"
               SizedBox(
                 width: double.infinity,
                 height: 54,
                 child: OutlinedButton(
-                  onPressed: _isLoading ? null : () => Navigator.pop(context),
+                  onPressed: (_isLoading || _isUploadingAvatar) ? null : () => Navigator.pop(context),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.white,
                     side: const BorderSide(color: Colors.white54),

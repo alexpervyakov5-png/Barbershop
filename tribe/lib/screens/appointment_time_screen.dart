@@ -118,7 +118,6 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
 
       if (availabilityResponse.isEmpty) return {};
 
-      // ✅ ИСПРАВЛЕНО: используем status_id вместо status
       final appointmentsResponse = await Supabase.instance.client
           .from('appointments')
           .select('start_datetime, end_datetime')
@@ -226,6 +225,7 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
     }
   }
 
+  // ✅ ОБНОВЛЁННЫЙ МЕТОД: с отправкой email уведомлений
   Future<void> _confirmBooking() async {
     if (_selectedTime == null) {
       if (!mounted) return;
@@ -255,17 +255,42 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
       }
 
       final serviceIds = widget.serviceIds ?? [widget.serviceId!];
+      int? lastAppointmentId;
       
+      // ✅ Создаём записи и получаем ID последней
       for (var serviceId in serviceIds) {
-        // ✅ ИСПРАВЛЕНО: используем status_id вместо status
-        await Supabase.instance.client.from('appointments').insert({
-          'client_id': userId,
-          'barber_id': widget.masterId,
-          'service_id': serviceId,
-          'start_datetime': selectedDateTime.toIso8601String(),
-          'end_datetime': endDateTime.toIso8601String(),
-          'status_id': AppointmentStatus.booked,
-        });
+        final response = await Supabase.instance.client
+            .from('appointments')
+            .insert({
+              'client_id': userId,
+              'barber_id': widget.masterId,
+              'service_id': serviceId,
+              'start_datetime': selectedDateTime.toIso8601String(),
+              'end_datetime': endDateTime.toIso8601String(),
+              'status_id': AppointmentStatus.booked,
+            })
+            .select('appointment_id')
+            .single();
+        
+        lastAppointmentId = response['appointment_id'] as int;
+      }
+
+      debugPrint('✅ Appointment created with ID: $lastAppointmentId');
+
+      // ✅ Отправка email уведомлений (в фоне, не блокируем UI)
+      if (lastAppointmentId != null) {
+        // Запускаем асинхронно, не ждём результата
+        Supabase.instance.client
+            .rpc('send_appointment_emails', params: {
+              'p_appointment_id': lastAppointmentId,
+            })
+            .then((result) {
+              debugPrint('📧 Email notifications sent: $result');
+            })
+            .catchError((e) {
+              debugPrint('⚠️ Email sending failed: $e');
+              // Не блокируем пользователя если email не отправился
+            });
       }
 
       if (mounted) {
@@ -286,6 +311,37 @@ class _AppointmentTimeScreenState extends State<AppointmentTimeScreen> {
                 const SizedBox(height: 8),
                 Text('Длительность: ~${(_serviceDuration / 60).toStringAsFixed(1)} ч ($_serviceDuration мин)', 
                      style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 16),
+                // ✅ Добавлено уведомление об email
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF4CAF50).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: const Color(0xFF4CAF50).withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.email_outlined,
+                        color: Color(0xFF4CAF50),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          '📧 Уведомления отправлены на email вам и мастеру',
+                          style: TextStyle(
+                            color: Color(0xFF4CAF50),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
             actions: [
